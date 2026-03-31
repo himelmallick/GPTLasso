@@ -30,11 +30,71 @@
 \item{...}{Reserved for future extensions.}
 }
 \value{
-A \code{predict.gptLasso} object containing study-wise predictions
-for the overall, individual, and pretrained models, support summaries,
-and optional error summaries.
+A \code{predict.gptLasso} object, stored as a list. Important components include:
+\itemize{
+\item \code{yhatoverall}: study-wise predictions from the pooled stage-one fit.
+\item \code{yhatind}: study-wise predictions from the individual study fits.
+\item \code{yhatpre}: study-wise predictions from the pretrained transfer fits.
+\item \code{supoverall}: selected feature indices from the pooled stage-one fit.
+\item \code{supind}: union of selected feature indices across the individual fits.
+\item \code{suppre.common}: stage-one support reused by the pretrained fits.
+\item \code{suppre.individual}: additional feature indices selected by the pretrained fits beyond \code{suppre.common}.
+\item \code{linkoverall}, \code{linkind}, \code{linkpre}: optional link-scale predictions when \code{return.link = TRUE}.
+\item \code{erroverall}, \code{errind}, \code{errpre}: optional performance summaries when \code{ytest} is supplied.
+}
 }
 \description{
 Generate overall, individual, and pretrained predictions from a \code{gptLasso}
 object on Bioconductor-style multistudy multiview test data.
+}
+\examples{
+# Gaussian prediction example
+set.seed(1234)
+sim_dat <- sim.gaussian.data()
+x_train <- sim_dat$x_train
+x_test <- sim_dat$x_test
+ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
+
+fit_gaussian <- gptLasso(
+  x = x_train,
+  alpha_ptlasso = 0.5,
+  family = "gaussian",
+  type.measure = "mse",
+  nfolds = 3
+)
+
+pred_gaussian <- predict(
+  fit_gaussian,
+  xtest = x_test,
+  ytest = ytest,
+  type = "response"
+)
+
+names(pred_gaussian)
+str(pred_gaussian$yhatpre)
+pred_gaussian$errpre
+
+# Binomial prediction example
+set.seed(5678)
+sim_dat_bin <- sim.binary.data()
+x_train_bin <- sim_dat_bin$x_train
+x_test_bin <- sim_dat_bin$x_test
+ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
+
+fit_binomial <- gptLasso(
+  x = x_train_bin,
+  alpha_ptlasso = 0.5,
+  family = "binomial",
+  type.measure = "auc",
+  nfolds = 3
+)
+
+pred_binomial <- predict(
+  fit_binomial,
+  xtest = x_test_bin,
+  ytest = ytest_bin,
+  type = "response"
+)
+
+pred_binomial$errpre
 }

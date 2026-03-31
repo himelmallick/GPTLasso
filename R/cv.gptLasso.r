@@ -19,9 +19,56 @@
 #' @param ncores Number of worker cores for study-level parallel fits.
 #' @param ... Additional arguments forwarded to `gptLasso()`.
 #'
-#' @return A `cv.gptLasso` object containing the selected transfer-learning
-#'   values, performance summaries, and the fitted model list.
+#' @return A `cv.gptLasso` object, stored as a list. Important components include:
+#' \itemize{
+#'   \item `alpha_ptlasso_hat`: the selected fixed transfer-learning value.
+#'   \item `varying.alpha_ptlasso_hat`: study-specific transfer-learning values chosen from the same grid.
+#'   \item `alpha_ptlasso_list`: the candidate transfer-learning grid that was evaluated.
+#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, including overall, mean, and study-specific columns.
+#'   \item `errind`: performance summary for the individual study fits on the training layout.
+#'   \item `erroverall`: performance summary for the pooled stage-one fit on the training layout.
+#'   \item `fitoverall`: the shared overall fit reused across the alpha grid.
+#'   \item `fitind`: the shared list of individual study fits reused across the alpha grid.
+#'   \item `fit`: the list of `gptLasso` objects corresponding to `alpha_ptlasso_list`.
+#'   \item `s`: the lambda rule used when summarizing candidate performance.
+#'   \item `alpha_ptlasso_hat.choice`: whether selection was based on the overall or mean metric.
+#' }
+#'
+#' @examples
+#' # Gaussian cross-validation example
+#' set.seed(1234)
+#' sim_dat <- sim.gaussian.data()
+#' x_train <- sim_dat$x_train
+#'
+#' cv_fit_gaussian <- cv.gptLasso(
+#'   x = x_train,
+#'   family = "gaussian",
+#'   type.measure = "mse",
+#'   alpha_ptlasso_list = c(0, 0.5, 1),
+#'   nfolds = 3
+#' )
+#'
+#' cv_fit_gaussian$alpha_ptlasso_hat
+#' cv_fit_gaussian$varying.alpha_ptlasso_hat
+#' cv_fit_gaussian$errpre
+#'
+#' # Binomial cross-validation example
+#' set.seed(5678)
+#' sim_dat_bin <- sim.binary.data()
+#' x_train_bin <- sim_dat_bin$x_train
+#'
+#' cv_fit_binomial <- cv.gptLasso(
+#'   x = x_train_bin,
+#'   family = "binomial",
+#'   type.measure = "auc",
+#'   alpha_ptlasso_list = c(0, 0.5, 1),
+#'   nfolds = 3
+#' )
+#'
+#' cv_fit_binomial$alpha_ptlasso_hat
+#' head(cv_fit_binomial$errpre)
 #' @export
+
 cv.gptLasso <- function(
     x,
     alpha_ptlasso_list = seq(0, 1, length = 11),

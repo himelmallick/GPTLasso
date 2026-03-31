@@ -27,8 +27,57 @@
 #' @param ncores Number of worker cores for study-level parallel fits.
 #' @param ... Additional arguments forwarded to the multiview base fitter.
 #'
-#' @return A `gptLasso` object containing metadata, fitted overall,
-#'   individual, and pretrained models, plus offset and support information.
+#' @return A `gptLasso` object, stored as a list. Important components include:
+#' \itemize{
+#'   \item `study_names`: study labels detected from `x$sample_metadata$study`.
+#'   \item `view_names`: view labels detected from `x$feature_metadata`.
+#'   \item `n_by_study`: number of samples in each study.
+#'   \item `alpha_ptlasso`: the transfer-learning level used for the fit.
+#'   \item `fitoverall`: the pooled multiview stage-one fit.
+#'   \item `fitind`: a named list of study-specific individual fits.
+#'   \item `fitpre`: a named list of study-specific pretrained transfer fits.
+#'   \item `support.vars`: feature indices selected by the overall stage-one fit.
+#'   \item `group_baseline`: study-level baseline offsets used when `group.intercepts = TRUE`.
+#'   \item `preval.offset`: study-wise stage-one linear predictors reused as offsets in pretraining.
+#'   \item `training_layout`: the normalized training container split by study and view.
+#' }
+#'
+#' @examples
+#' # Gaussian example
+#' set.seed(1234)
+#' sim_dat <- sim.gaussian.data()
+#' x_train <- sim_dat$x_train
+#' str(x_train)
+#'
+#' fit_gaussian <- gptLasso(
+#'   x = x_train,
+#'   alpha_ptlasso = 0.5,
+#'   family = "gaussian",
+#'   type.measure = "mse",
+#'   nfolds = 3
+#' )
+#'
+#' names(fit_gaussian)
+#' fit_gaussian$study_names
+#' fit_gaussian$view_names
+#' fit_gaussian$n_by_study
+#' fit_gaussian$support.vars
+#'
+#' # Binomial example
+#' set.seed(5678)
+#' sim_dat_bin <- sim.binary.data()
+#' x_train_bin <- sim_dat_bin$x_train
+#'
+#' fit_binomial <- gptLasso(
+#'   x = x_train_bin,
+#'   alpha_ptlasso = 0.5,
+#'   family = "binomial",
+#'   type.measure = "auc",
+#'   nfolds = 3
+#' )
+#'
+#' names(fit_binomial)
+#' fit_binomial$group_baseline
 #' @export
 gptLasso <- function(
     x,

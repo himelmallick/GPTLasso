@@ -1,3 +1,552 @@
+# Helper: simulation base function
+.trigger_InterSIM_safe <- function(n) {
+  sim.data <- InterSIM::InterSIM(
+    n.sample = n,
+    cluster.sample.prop = c(0.51, 0.49),
+    delta.methyl = 0,
+    delta.expr = 0,
+    delta.protein = 0
+  )
+  
+  data_names <- c("methyl", "expr", "protein")
+  list_features <- vector("list", length(data_names))
+  names(list_features) <- data_names
+  list_features[[1]] <- t(sim.data$dat.methyl)
+  list_features[[2]] <- t(sim.data$dat.expr)
+  list_features[[3]] <- t(sim.data$dat.protein)
+  
+  feature_table <- as.data.frame(Reduce(rbind, list_features))
+  feature_ids <- make.unique(rownames(feature_table))
+  rownames(feature_table) <- feature_ids
+  colnames(feature_table) <- stringr::str_to_title(colnames(feature_table))
+  
+  sample_metadata <- sim.data$clustering.assignment
+  colnames(sample_metadata) <- c("subjectID", "Y")
+  sample_metadata$subjectID <- stringr::str_to_title(sample_metadata$subjectID)
+  rownames(sample_metadata) <- sample_metadata$subjectID
+  
+  row_id <- rep(data_names, vapply(list_features, nrow, integer(1)))
+  feature_metadata <- cbind.data.frame(
+    featureID = feature_ids,
+    featureType = row_id
+  )
+  rownames(feature_metadata) <- feature_metadata$featureID
+  
+  list(
+    feature_table = feature_table,
+    sample_metadata = sample_metadata,
+    feature_metadata = feature_metadata
+  )
+}
+
+#' Generate simulated multi-study, multiview data for benchmarking
+#'
+#' Generates multi-study simulated multiview datasets with specified parameters,
+#' including per-study sample size, signal-to-noise ratio, differential
+#' expression probabilities, and response generation mode. The output is split
+#' into training and testing sets within each study.
+#'
+#' The model uses a shared and study-specific coefficient structure:
+#' for study `s`,
+#' `beta_s = sqrt(rho.beta) * beta_shared + sqrt(1 - rho.beta) * beta_indiv_s`,
+#' where `beta_shared` is common across studies and `beta_indiv_s` is
+#' study-specific.
+#'
+#' Special cases:
+#' - `nstudy = 1`, `rho.beta = 1`, `sigma.alpha = 0`, `tau.snr = 0` recovers
+#'   the single-study generator behavior.
+#' - `rho.beta = 0` yields independent study-specific coefficients.
+#'
+#' @param nsample Number of samples per study.
+#' @param nstudy Number of studies.
+#' @param snr Signal-to-noise ratio for continuous outcomes.
+#' @param p.train Train-test split ratio.
+#' @param de.prob Differential-expression probability across all modalities.
+#' @param de.downProb Down-regulation probability across modalities.
+#' @param de.facLoc Differential-expression factor location across modalities.
+#' @param de.facScale Differential-expression factor scale across modalities.
+#' @param ygen.mode Outcome-generation mode: `"LM"`, `"Friedman"`, or `"Friedman2"`.
+#' @param outcome.type Outcome type: `"continuous"`, `"binary"`, or `"survival"`.
+#' @param surv.hscale Multiplicative scale on hazard for survival outcomes.
+#' @param cens.lower Lower bound for uniform censoring time.
+#' @param cens.upper Upper bound for uniform censoring time.
+#' @param rho.beta Shared-versus-study-specific mixing level in `[0, 1]`.
+#' @param sigma.alpha Standard deviation of study-specific intercepts.
+#' @param tau.snr Standard deviation of the log signal-to-noise ratio across studies.
+#' @param nrep Number of repetitions.
+#' @param seed Random seed.
+#'
+#' @return A list containing:
+#' \itemize{
+#'   \item `trainDat`: list of simulated training datasets indexed by repetition, then study.
+#'   \item `testDat`: list of simulated testing datasets indexed by repetition, then study.
+#'   \item `true_betas`: shared and study-specific coefficient vectors used to generate the outcomes.
+#'   \item Simulation settings echoed back, including `snr`, `p.train`, `de.prob`,
+#'   `de.downProb`, `de.facLoc`, `de.facScale`, `nrep`, `seed`, `ygen.mode`,
+#'   `outcome.type`, `nstudy`, `rho.beta`, `sigma.alpha`, and `tau.snr`.
+#' }
+#' @export
+gen_simmba_multistudy <- function(nsample, # Number of samples per study.
+                                  nstudy = 1, # Number of studies.
+                                  snr = 1, # Signal-to-noise ratio for continuous outcomes.
+                                  p.train = 0.7, # Train-test split ratio.
+                                  de.prob = rep(0.1, 3), # Differential-expression probability across all modalities.
+                                  de.downProb = rep(0.5, 3), # Down-regulation probability across modalities.
+                                  de.facLoc = rep(1, 3), # Differential-expression factor location across modalities.
+                                  de.facScale = rep(0.4, 3), # Differential-expression factor scale across modalities.
+                                  ygen.mode = c("LM", "Friedman", "Friedman2"), # Outcome-generation mode
+                                  outcome.type = c("continuous", "binary", "survival"), # Outcome type
+                                  surv.hscale = 1, # Multiplicative scale on hazard for survival outcomes.
+                                  cens.lower = 1, # Lower bound for uniform censoring time.
+                                  cens.upper = 3, # Upper bound for uniform censoring time.
+                                  rho.beta = 1, # Shared-versus-study-specific mixing level in `[0, 1]`.
+                                  sigma.alpha = 0, # Standard deviation of study-specific intercepts.
+                                  tau.snr = 0, # Standard deviation of the log signal-to-noise ratio across studies.
+                                  nrep = 100, # Number of repetitions.
+                                  seed = 1234) # Random seed.
+{
+  set.seed(seed)
+  
+  ygen.mode <- match.arg(ygen.mode)
+  outcome.type <- match.arg(outcome.type)
+  
+  trainDat <- testDat <- vector("list", nrep)
+  names(trainDat) <- names(testDat) <- paste("Rep", seq_len(nrep), sep = "_")
+  
+  true_betas <- vector("list", nrep)
+  names(true_betas) <- paste0("Rep_", seq_len(nrep))
+  
+  if (nstudy == 1 && rho.beta == 1 && sigma.alpha == 0 && tau.snr == 0) {
+    for (k in seq_len(nrep)) {
+      pcl <- .trigger_InterSIM_safe(n = nsample)
+      X <- as.matrix(t(pcl$feature_table))
+      
+      nfeature <- table(pcl$feature_metadata$featureType)
+      de.facs <- vector("list", 3)
+      for (i in seq_len(3)) {
+        de.facs[[i]] <- splatter:::getLNormFactors(
+          n.facs = nfeature[i],
+          sel.prob = de.prob[i],
+          neg.prob = de.downProb[i],
+          fac.loc = de.facLoc[i],
+          fac.scale = de.facScale[i]
+        )
+      }
+      
+      beta0 <- log2(unlist(de.facs))
+      true_betas[[k]] <- list(
+        beta_shared = beta0,
+        beta_indiv = list(Study_1 = rep(0, length(beta0))),
+        beta_s = list(Study_1 = beta0)
+      )
+      
+      eta_lin <- as.numeric(X %*% beta0)
+      
+      if (ygen.mode %in% c("Friedman", "Friedman2")) {
+        nonzero_index <- which(beta0 != 0)
+        if (length(nonzero_index) < 5) {
+          stop("Not enough non-zero coefficients to select 5 Friedman features.")
+        }
+        friedman_index <- sample(nonzero_index, 5)
+        X.friedman <- X[, friedman_index, drop = FALSE]
+        Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
+          20 * (X.friedman[, 3] - 0.5)^2 +
+          10 * X.friedman[, 4] +
+          5 * X.friedman[, 5]
+      }
+      
+      if (ygen.mode == "LM") {
+        eta <- eta_lin
+      } else if (ygen.mode == "Friedman") {
+        eta <- Xbeta.friedman
+      } else {
+        eta <- eta_lin + Xbeta.friedman
+      }
+      
+      pcl$sample_metadata$Xbeta <- eta
+      
+      if (outcome.type == "continuous") {
+        sigma2 <- as.vector(stats::var(eta) / snr)
+        pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(nsample) * sqrt(sigma2))
+      } else if (outcome.type == "binary") {
+        p <- stats::plogis(eta)
+        pcl$sample_metadata$Y <- stats::rbinom(nsample, size = 1, prob = p)
+      } else {
+        h <- as.vector(surv.hscale * exp(eta))
+        X0 <- stats::rexp(nsample, rate = h)
+        C <- stats::runif(nsample, cens.lower, cens.upper)
+        pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
+        pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+      }
+      
+      train <- test <- pcl
+      tr.row <- sample.int(nsample, size = round(nsample * p.train), replace = FALSE)
+      train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
+      test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
+      train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
+      test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
+      trainDat[[k]] <- list(Study_1 = train)
+      testDat[[k]] <- list(Study_1 = test)
+    }
+    
+    return(list(
+      trainDat = trainDat,
+      testDat = testDat,
+      true_betas = true_betas,
+      snr = snr,
+      p.train = p.train,
+      de.prob = de.prob,
+      de.downProb = de.downProb,
+      de.facLoc = de.facLoc,
+      de.facScale = de.facScale,
+      nrep = nrep,
+      seed = seed,
+      ygen.mode = ygen.mode,
+      outcome.type = outcome.type,
+      surv.hscale = surv.hscale,
+      cens.lower = cens.lower,
+      cens.upper = cens.upper,
+      nstudy = nstudy,
+      rho.beta = rho.beta,
+      sigma.alpha = sigma.alpha,
+      tau.snr = tau.snr
+    ))
+  }
+  
+  for (k in seq_len(nrep)) {
+    pcl_template <- .trigger_InterSIM_safe(n = nsample)
+    X_template <- as.matrix(t(pcl_template$feature_table))
+    nfeature <- table(pcl_template$feature_metadata$featureType)
+    p <- nrow(pcl_template$feature_table)
+    
+    de.facs.shared <- vector("list", 3)
+    for (i in seq_len(3)) {
+      de.facs.shared[[i]] <- splatter:::getLNormFactors(
+        n.facs = nfeature[i],
+        sel.prob = de.prob[i],
+        neg.prob = de.downProb[i],
+        fac.loc = de.facLoc[i],
+        fac.scale = de.facScale[i]
+      )
+    }
+    beta_shared <- log2(unlist(de.facs.shared))
+    
+    train_list <- vector("list", nstudy)
+    test_list <- vector("list", nstudy)
+    names(train_list) <- names(test_list) <- paste0("Study_", seq_len(nstudy))
+    
+    true_betas[[k]] <- list(
+      beta_shared = beta_shared,
+      beta_indiv = vector("list", nstudy),
+      beta_s = vector("list", nstudy)
+    )
+    names(true_betas[[k]]$beta_indiv) <- paste0("Study_", seq_len(nstudy))
+    names(true_betas[[k]]$beta_s) <- paste0("Study_", seq_len(nstudy))
+    
+    for (s in seq_len(nstudy)) {
+      if (rho.beta < 1) {
+        de.facs.indiv <- vector("list", 3)
+        for (i in seq_len(3)) {
+          de.facs.indiv[[i]] <- splatter:::getLNormFactors(
+            n.facs = nfeature[i],
+            sel.prob = de.prob[i],
+            neg.prob = de.downProb[i],
+            fac.loc = de.facLoc[i],
+            fac.scale = de.facScale[i]
+          )
+        }
+        beta_indiv <- log2(unlist(de.facs.indiv))
+      } else {
+        beta_indiv <- rep(0, length(beta_shared))
+      }
+      
+      beta_s <- sqrt(rho.beta) * beta_shared + sqrt(1 - rho.beta) * beta_indiv
+      true_betas[[k]]$beta_indiv[[s]] <- beta_indiv
+      true_betas[[k]]$beta_s[[s]] <- beta_s
+      
+      alpha_s <- if (sigma.alpha > 0) stats::rnorm(1, 0, sigma.alpha) else 0
+      log_snr_s <- if (tau.snr > 0) log(snr) + stats::rnorm(1, 0, tau.snr) else log(snr)
+      snr_s <- exp(log_snr_s)
+      
+      pcl <- if (s == 1) pcl_template else .trigger_InterSIM_safe(n = nsample)
+      X <- as.matrix(t(pcl$feature_table))
+      n_s <- nrow(X)
+      eta_lin <- as.numeric(X %*% beta_s) + alpha_s
+      
+      if (ygen.mode %in% c("Friedman", "Friedman2")) {
+        nonzero_index <- which(beta_s != 0)
+        if (length(nonzero_index) < 5) {
+          stop("Not enough non-zero coefficients to select 5 Friedman features.")
+        }
+        friedman_index <- sample(nonzero_index, 5)
+        X.friedman <- X[, friedman_index, drop = FALSE]
+        Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
+          20 * (X.friedman[, 3] - 0.5)^2 +
+          10 * X.friedman[, 4] +
+          5 * X.friedman[, 5]
+      }
+      
+      if (ygen.mode == "LM") {
+        eta <- eta_lin
+      } else if (ygen.mode == "Friedman") {
+        eta <- Xbeta.friedman
+      } else {
+        eta <- eta_lin + Xbeta.friedman
+      }
+      
+      pcl$sample_metadata$Xbeta <- eta
+      pcl$sample_metadata$study <- paste0("Study_", s)
+      
+      if (outcome.type == "continuous") {
+        sigma2 <- as.vector(stats::var(eta) / snr_s)
+        pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(n_s) * sqrt(sigma2))
+      } else if (outcome.type == "binary") {
+        p_prob <- stats::plogis(eta)
+        pcl$sample_metadata$Y <- stats::rbinom(n_s, size = 1, prob = p_prob)
+      } else {
+        h <- as.vector(surv.hscale * exp(eta))
+        X0 <- stats::rexp(n_s, rate = h)
+        C <- stats::runif(n_s, cens.lower, cens.upper)
+        pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
+        pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+      }
+      
+      train <- test <- pcl
+      tr.row <- sample.int(n_s, size = round(n_s * p.train), replace = FALSE)
+      train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
+      test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
+      train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
+      test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
+      train_list[[s]] <- train
+      test_list[[s]] <- test
+    }
+    
+    trainDat[[k]] <- train_list
+    testDat[[k]] <- test_list
+  }
+  
+  list(
+    trainDat = trainDat,
+    testDat = testDat,
+    true_betas = true_betas,
+    snr = snr,
+    p.train = p.train,
+    de.prob = de.prob,
+    de.downProb = de.downProb,
+    de.facLoc = de.facLoc,
+    de.facScale = de.facScale,
+    nrep = nrep,
+    seed = seed,
+    ygen.mode = ygen.mode,
+    outcome.type = outcome.type,
+    surv.hscale = surv.hscale,
+    cens.lower = cens.lower,
+    cens.upper = cens.upper,
+    nstudy = nstudy,
+    rho.beta = rho.beta,
+    sigma.alpha = sigma.alpha,
+    tau.snr = tau.snr
+  )
+}
+
+ptmv_build_sim_container <- function(sim_obj, rep_id = "Rep_1", dataset = c("trainDat", "testDat")) {
+  dataset <- match.arg(dataset)
+  rep_obj <- sim_obj[[dataset]][[rep_id]]
+  if (is.null(rep_obj)) {
+    stop(sprintf("%s not found in sim_obj$%s.", rep_id, dataset))
+  }
+  
+  study_names <- names(rep_obj)
+  reference_feature_metadata <- rep_obj[[study_names[1]]]$feature_metadata
+  feature_order <- as.character(reference_feature_metadata$featureID)
+  
+  feature_table <- do.call(cbind, lapply(study_names, function(study_name) {
+    study_obj <- rep_obj[[study_name]]
+    if (!identical(as.character(study_obj$feature_metadata$featureID), feature_order)) {
+      stop("All studies must share the same feature ordering.")
+    }
+    ft <- as.matrix(study_obj$feature_table)
+    if (!identical(rownames(ft), feature_order)) {
+      stop("feature_table rownames must match feature_metadata$featureID.")
+    }
+    smd <- study_obj$sample_metadata
+    sample_ids <- if ("sample_id" %in% colnames(smd)) {
+      as.character(smd$sample_id)
+    } else if ("subjectID" %in% colnames(smd)) {
+      as.character(smd$subjectID)
+    } else {
+      colnames(ft)
+    }
+    colnames(ft) <- paste(study_name, sample_ids, sep = "__")
+    ft
+  }))
+  
+  sample_metadata <- do.call(rbind, lapply(study_names, function(study_name) {
+    study_obj <- rep_obj[[study_name]]
+    smd <- as.data.frame(study_obj$sample_metadata, stringsAsFactors = FALSE)
+    if (!("sample_id" %in% colnames(smd))) {
+      if ("subjectID" %in% colnames(smd)) {
+        smd$sample_id <- as.character(smd$subjectID)
+      } else {
+        smd$sample_id <- colnames(study_obj$feature_table)
+      }
+    }
+    smd$sample_id <- paste(study_name, as.character(smd$sample_id), sep = "__")
+    if (!("study" %in% colnames(smd))) {
+      smd$study <- study_name
+    } else {
+      smd$study <- as.character(smd$study)
+      smd$study[smd$study == ""] <- study_name
+    }
+    rownames(smd) <- NULL
+    smd
+  }))
+  
+  sample_metadata <- sample_metadata[match(colnames(feature_table), sample_metadata$sample_id), , drop = FALSE]
+  if (!identical(sample_metadata$sample_id, colnames(feature_table))) {
+    stop("Failed to align sample_metadata to the concatenated feature table.")
+  }
+  rownames(sample_metadata) <- sample_metadata$sample_id
+  
+  feature_metadata <- as.data.frame(reference_feature_metadata, stringsAsFactors = FALSE)
+  if (!("featureType" %in% colnames(feature_metadata)) && "view" %in% colnames(feature_metadata)) {
+    feature_metadata$featureType <- feature_metadata$view
+  }
+  feature_metadata <- feature_metadata[match(feature_order, feature_metadata$featureID), , drop = FALSE]
+  rownames(feature_metadata) <- feature_metadata$featureID
+  
+  list(
+    feature_table = feature_table,
+    sample_metadata = sample_metadata,
+    feature_metadata = feature_metadata
+  )
+}
+
+#' Simulate Gaussian multistudy multiview data for documentation examples
+#'
+#' Generate one simulated training container and one simulated test container
+#' aligned with the `x` input expected by `gptLasso()` and related functions.
+#'
+#' @inheritParams gen_simmba_multistudy
+#'
+#' @return A list with:
+#' \itemize{
+#'   \item `x_train`: a Bioconductor-style multistudy multiview training container.
+#'   \item `x_test`: a matching held-out test container with the same feature and view layout.
+#' }
+#' @examples
+#' sim_dat <- sim.gaussian.data()
+#' names(sim_dat)
+#' str(sim_dat$x_train$sample_metadata)
+#' @export
+sim.gaussian.data <- function(nsample = 200,
+                              nstudy = 3,
+                              snr = 5,
+                              rho.beta = 0.5,
+                              sigma.alpha = 0.1,
+                              tau.snr = 0.1,
+                              outcome.type = "continuous",
+                              nrep = 1,
+                              seed = 1234,
+                              p.train = 0.7,
+                              de.prob = rep(0.1, 3),
+                              de.downProb = rep(0.5, 3),
+                              de.facLoc = rep(1, 3),
+                              de.facScale = rep(0.4, 3),
+                              ygen.mode = "LM",
+                              surv.hscale = 1,
+                              cens.lower = 1,
+                              cens.upper = 3) {
+  sim_obj <- gen_simmba_multistudy(
+    nsample = nsample,
+    nstudy = nstudy,
+    snr = snr,
+    p.train = p.train,
+    de.prob = de.prob,
+    de.downProb = de.downProb,
+    de.facLoc = de.facLoc,
+    de.facScale = de.facScale,
+    ygen.mode = ygen.mode,
+    outcome.type = outcome.type,
+    surv.hscale = surv.hscale,
+    cens.lower = cens.lower,
+    cens.upper = cens.upper,
+    rho.beta = rho.beta,
+    sigma.alpha = sigma.alpha,
+    tau.snr = tau.snr,
+    nrep = nrep,
+    seed = seed
+  )
+  
+  list(
+    x_train = ptmv_build_sim_container(sim_obj, rep_id = "Rep_1", dataset = "trainDat"),
+    x_test = ptmv_build_sim_container(sim_obj, rep_id = "Rep_1", dataset = "testDat")
+  )
+}
+
+#' Simulate binary multistudy multiview data for documentation examples
+#'
+#' Generate one simulated training container and one simulated test container
+#' aligned with the `x` input expected by `gptLasso()` and related functions.
+#'
+#' @inheritParams gen_simmba_multistudy
+#'
+#' @return A list with:
+#' \itemize{
+#'   \item `x_train`: a Bioconductor-style multistudy multiview training container.
+#'   \item `x_test`: a matching held-out test container with the same feature and view layout.
+#' }
+#' @examples
+#' sim_dat <- sim.binary.data()
+#' names(sim_dat)
+#' table(sim_dat$x_train$sample_metadata$Y)
+#' @export
+sim.binary.data <- function(nsample = 300,
+                            nstudy = 3,
+                            snr = 5,
+                            rho.beta = 0.5,
+                            sigma.alpha = 0.1,
+                            tau.snr = 0.1,
+                            outcome.type = "binary",
+                            nrep = 1,
+                            seed = 5678,
+                            p.train = 0.7,
+                            de.prob = rep(0.1, 3),
+                            de.downProb = rep(0.5, 3),
+                            de.facLoc = rep(1, 3),
+                            de.facScale = rep(0.4, 3),
+                            ygen.mode = "LM",
+                            surv.hscale = 1,
+                            cens.lower = 1,
+                            cens.upper = 3) {
+  sim_obj <- gen_simmba_multistudy(
+    nsample = nsample,
+    nstudy = nstudy,
+    snr = snr,
+    p.train = p.train,
+    de.prob = de.prob,
+    de.downProb = de.downProb,
+    de.facLoc = de.facLoc,
+    de.facScale = de.facScale,
+    ygen.mode = ygen.mode,
+    outcome.type = outcome.type,
+    surv.hscale = surv.hscale,
+    cens.lower = cens.lower,
+    cens.upper = cens.upper,
+    rho.beta = rho.beta,
+    sigma.alpha = sigma.alpha,
+    tau.snr = tau.snr,
+    nrep = nrep,
+    seed = seed
+  )
+  
+  list(
+    x_train = ptmv_build_sim_container(sim_obj, rep_id = "Rep_1", dataset = "trainDat"),
+    x_test = ptmv_build_sim_container(sim_obj, rep_id = "Rep_1", dataset = "testDat")
+  )
+}
+
+
 # Helper: choose whether a metric should be minimized or maximized.
 # Used in `cv.gptLasso()` when selecting `alpha_ptlasso_hat`.
 ptmv_match_metric <- function(type.measure) {

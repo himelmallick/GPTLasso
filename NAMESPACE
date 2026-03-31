@@ -3,4 +3,7 @@
 S3method(predict,cv.gptLasso)
 S3method(predict,gptLasso)
 export(cv.gptLasso)
+export(gen_simmba_multistudy)
 export(gptLasso)
+export(sim.binary.data)
+export(sim.gaussian.data)

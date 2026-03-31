@@ -36,11 +36,69 @@
 \item{...}{Reserved for future extensions.}
 }
 \value{
-A \code{predict.cv.gptLasso} object containing the chosen transfer-learning
-setting, study-wise predictions, support summaries, and optional error summaries.
+A \code{predict.cv.gptLasso} object with the same prediction components as
+\code{predict.gptLasso()}, plus:
+\itemize{
+\item \code{alpha_ptlasso}: the chosen transfer-learning value, either fixed or study-specific.
+\item \code{fit}: the originating \code{cv.gptLasso} object.
+}
+When \code{ytest} is supplied, the returned object also includes \code{erroverall},
+\code{errind}, and \code{errpre}.
 }
 \description{
 Resolve one fixed or varying transfer-learning choice from a \code{cv.gptLasso}
 object and generate predictions on Bioconductor-style multistudy multiview
 test data.
+}
+\examples{
+# Gaussian cross-validated prediction example
+set.seed(1234)
+sim_dat <- sim.gaussian.data()
+x_train <- sim_dat$x_train
+x_test <- sim_dat$x_test
+ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
+
+cv_fit_gaussian <- cv.gptLasso(
+  x = x_train,
+  family = "gaussian",
+  type.measure = "mse",
+  alpha_ptlasso_list = c(0, 0.5, 1),
+  nfolds = 3
+)
+
+pred_cv_gaussian <- predict(
+  cv_fit_gaussian,
+  xtest = x_test,
+  ytest = ytest,
+  alpha_ptlasso_type = "fixed",
+  type = "response"
+)
+
+pred_cv_gaussian$alpha_ptlasso
+pred_cv_gaussian$errpre
+
+# Binomial cross-validated prediction example
+set.seed(5678)
+sim_dat_bin <- sim.binary.data()
+x_train_bin <- sim_dat_bin$x_train
+x_test_bin <- sim_dat_bin$x_test
+ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
+
+cv_fit_binomial <- cv.gptLasso(
+  x = x_train_bin,
+  family = "binomial",
+  type.measure = "auc",
+  alpha_ptlasso_list = c(0, 0.5, 1),
+  nfolds = 3
+)
+
+pred_cv_binomial <- predict(
+  cv_fit_binomial,
+  xtest = x_test_bin,
+  ytest = ytest_bin,
+  alpha_ptlasso_type = "fixed",
+  type = "response"
+)
+
+pred_cv_binomial$fit$alpha_ptlasso_hat
 }

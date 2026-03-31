@@ -11,9 +11,69 @@
 #' @param return.link Should link-scale predictions also be returned?
 #' @param ... Reserved for future extensions.
 #'
-#' @return A `predict.gptLasso` object containing study-wise predictions
-#'   for the overall, individual, and pretrained models, support summaries,
-#'   and optional error summaries.
+#' @return A `predict.gptLasso` object, stored as a list. Important components include:
+#' \itemize{
+#'   \item `yhatoverall`: study-wise predictions from the pooled stage-one fit.
+#'   \item `yhatind`: study-wise predictions from the individual study fits.
+#'   \item `yhatpre`: study-wise predictions from the pretrained transfer fits.
+#'   \item `supoverall`: selected feature indices from the pooled stage-one fit.
+#'   \item `supind`: union of selected feature indices across the individual fits.
+#'   \item `suppre.common`: stage-one support reused by the pretrained fits.
+#'   \item `suppre.individual`: additional feature indices selected by the pretrained fits beyond `suppre.common`.
+#'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions when `return.link = TRUE`.
+#'   \item `erroverall`, `errind`, `errpre`: optional performance summaries when `ytest` is supplied.
+#' }
+#'
+#' @examples
+#' # Gaussian prediction example
+#' set.seed(1234)
+#' sim_dat <- sim.gaussian.data()
+#' x_train <- sim_dat$x_train
+#' x_test <- sim_dat$x_test
+#' ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
+#'
+#' fit_gaussian <- gptLasso(
+#'   x = x_train,
+#'   alpha_ptlasso = 0.5,
+#'   family = "gaussian",
+#'   type.measure = "mse",
+#'   nfolds = 3
+#' )
+#'
+#' pred_gaussian <- predict(
+#'   fit_gaussian,
+#'   xtest = x_test,
+#'   ytest = ytest,
+#'   type = "response"
+#' )
+#'
+#' names(pred_gaussian)
+#' str(pred_gaussian$yhatpre)
+#' pred_gaussian$errpre
+#'
+#' # Binomial prediction example
+#' set.seed(5678)
+#' sim_dat_bin <- sim.binary.data()
+#' x_train_bin <- sim_dat_bin$x_train
+#' x_test_bin <- sim_dat_bin$x_test
+#' ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
+#'
+#' fit_binomial <- gptLasso(
+#'   x = x_train_bin,
+#'   alpha_ptlasso = 0.5,
+#'   family = "binomial",
+#'   type.measure = "auc",
+#'   nfolds = 3
+#' )
+#'
+#' pred_binomial <- predict(
+#'   fit_binomial,
+#'   xtest = x_test_bin,
+#'   ytest = ytest_bin,
+#'   type = "response"
+#' )
+#'
+#' pred_binomial$errpre
 #' @export
 predict.gptLasso <- function(object, xtest, ytest = NULL,
                              type = c("link", "response", "class"),
@@ -161,8 +221,66 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #' @param return.link Should link-scale predictions also be returned?
 #' @param ... Reserved for future extensions.
 #'
-#' @return A `predict.cv.gptLasso` object containing the chosen transfer-learning
-#'   setting, study-wise predictions, support summaries, and optional error summaries.
+#' @return A `predict.cv.gptLasso` object with the same prediction components as
+#'   `predict.gptLasso()`, plus:
+#' \itemize{
+#'   \item `alpha_ptlasso`: the chosen transfer-learning value, either fixed or study-specific.
+#'   \item `fit`: the originating `cv.gptLasso` object.
+#' }
+#' When `ytest` is supplied, the returned object also includes `erroverall`,
+#' `errind`, and `errpre`.
+#'
+#' @examples
+#' # Gaussian cross-validated prediction example
+#' set.seed(1234)
+#' sim_dat <- sim.gaussian.data()
+#' x_train <- sim_dat$x_train
+#' x_test <- sim_dat$x_test
+#' ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
+#'
+#' cv_fit_gaussian <- cv.gptLasso(
+#'   x = x_train,
+#'   family = "gaussian",
+#'   type.measure = "mse",
+#'   alpha_ptlasso_list = c(0, 0.5, 1),
+#'   nfolds = 3
+#' )
+#'
+#' pred_cv_gaussian <- predict(
+#'   cv_fit_gaussian,
+#'   xtest = x_test,
+#'   ytest = ytest,
+#'   alpha_ptlasso_type = "fixed",
+#'   type = "response"
+#' )
+#'
+#' pred_cv_gaussian$alpha_ptlasso
+#' pred_cv_gaussian$errpre
+#'
+#' # Binomial cross-validated prediction example
+#' set.seed(5678)
+#' sim_dat_bin <- sim.binary.data()
+#' x_train_bin <- sim_dat_bin$x_train
+#' x_test_bin <- sim_dat_bin$x_test
+#' ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
+#'
+#' cv_fit_binomial <- cv.gptLasso(
+#'   x = x_train_bin,
+#'   family = "binomial",
+#'   type.measure = "auc",
+#'   alpha_ptlasso_list = c(0, 0.5, 1),
+#'   nfolds = 3
+#' )
+#'
+#' pred_cv_binomial <- predict(
+#'   cv_fit_binomial,
+#'   xtest = x_test_bin,
+#'   ytest = ytest_bin,
+#'   alpha_ptlasso_type = "fixed",
+#'   type = "response"
+#' )
+#'
+#' pred_cv_binomial$fit$alpha_ptlasso_hat
 #' @export
 predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
                                 alpha_ptlasso = NULL,

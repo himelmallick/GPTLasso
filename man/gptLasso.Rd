@@ -67,11 +67,60 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 \item{...}{Additional arguments forwarded to the multiview base fitter.}
 }
 \value{
-A \code{gptLasso} object containing metadata, fitted overall,
-individual, and pretrained models, plus offset and support information.
+A \code{gptLasso} object, stored as a list. Important components include:
+\itemize{
+\item \code{study_names}: study labels detected from \code{x$sample_metadata$study}.
+\item \code{view_names}: view labels detected from \code{x$feature_metadata}.
+\item \code{n_by_study}: number of samples in each study.
+\item \code{alpha_ptlasso}: the transfer-learning level used for the fit.
+\item \code{fitoverall}: the pooled multiview stage-one fit.
+\item \code{fitind}: a named list of study-specific individual fits.
+\item \code{fitpre}: a named list of study-specific pretrained transfer fits.
+\item \code{support.vars}: feature indices selected by the overall stage-one fit.
+\item \code{group_baseline}: study-level baseline offsets used when \code{group.intercepts = TRUE}.
+\item \code{preval.offset}: study-wise stage-one linear predictors reused as offsets in pretraining.
+\item \code{training_layout}: the normalized training container split by study and view.
+}
 }
 \description{
 Train the multiview transfer-learning workflow using a Bioconductor-style
 input container with \code{feature_table}, \code{sample_metadata}, and
 \code{feature_metadata}.
+}
+\examples{
+# Gaussian example
+set.seed(1234)
+sim_dat <- sim.gaussian.data()
+x_train <- sim_dat$x_train
+str(x_train)
+
+fit_gaussian <- gptLasso(
+  x = x_train,
+  alpha_ptlasso = 0.5,
+  family = "gaussian",
+  type.measure = "mse",
+  nfolds = 3
+)
+
+names(fit_gaussian)
+fit_gaussian$study_names
+fit_gaussian$view_names
+fit_gaussian$n_by_study
+fit_gaussian$support.vars
+
+# Binomial example
+set.seed(5678)
+sim_dat_bin <- sim.binary.data()
+x_train_bin <- sim_dat_bin$x_train
+
+fit_binomial <- gptLasso(
+  x = x_train_bin,
+  alpha_ptlasso = 0.5,
+  family = "binomial",
+  type.measure = "auc",
+  nfolds = 3
+)
+
+names(fit_binomial)
+fit_binomial$group_baseline
 }

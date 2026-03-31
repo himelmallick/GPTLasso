@@ -54,10 +54,56 @@ cv.gptLasso(
 \item{...}{Additional arguments forwarded to \code{gptLasso()}.}
 }
 \value{
-A \code{cv.gptLasso} object containing the selected transfer-learning
-values, performance summaries, and the fitted model list.
+A \code{cv.gptLasso} object, stored as a list. Important components include:
+\itemize{
+\item \code{alpha_ptlasso_hat}: the selected fixed transfer-learning value.
+\item \code{varying.alpha_ptlasso_hat}: study-specific transfer-learning values chosen from the same grid.
+\item \code{alpha_ptlasso_list}: the candidate transfer-learning grid that was evaluated.
+\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, including overall, mean, and study-specific columns.
+\item \code{errind}: performance summary for the individual study fits on the training layout.
+\item \code{erroverall}: performance summary for the pooled stage-one fit on the training layout.
+\item \code{fitoverall}: the shared overall fit reused across the alpha grid.
+\item \code{fitind}: the shared list of individual study fits reused across the alpha grid.
+\item \code{fit}: the list of \code{gptLasso} objects corresponding to \code{alpha_ptlasso_list}.
+\item \code{s}: the lambda rule used when summarizing candidate performance.
+\item \code{alpha_ptlasso_hat.choice}: whether selection was based on the overall or mean metric.
+}
 }
 \description{
 Run \code{gptLasso()} across a grid of transfer-learning \code{alpha_ptlasso} values
 and select the best value using held-out performance.
+}
+\examples{
+# Gaussian cross-validation example
+set.seed(1234)
+sim_dat <- sim.gaussian.data()
+x_train <- sim_dat$x_train
+
+cv_fit_gaussian <- cv.gptLasso(
+  x = x_train,
+  family = "gaussian",
+  type.measure = "mse",
+  alpha_ptlasso_list = c(0, 0.5, 1),
+  nfolds = 3
+)
+
+cv_fit_gaussian$alpha_ptlasso_hat
+cv_fit_gaussian$varying.alpha_ptlasso_hat
+cv_fit_gaussian$errpre
+
+# Binomial cross-validation example
+set.seed(5678)
+sim_dat_bin <- sim.binary.data()
+x_train_bin <- sim_dat_bin$x_train
+
+cv_fit_binomial <- cv.gptLasso(
+  x = x_train_bin,
+  family = "binomial",
+  type.measure = "auc",
+  alpha_ptlasso_list = c(0, 0.5, 1),
+  nfolds = 3
+)
+
+cv_fit_binomial$alpha_ptlasso_hat
+head(cv_fit_binomial$errpre)
 }
