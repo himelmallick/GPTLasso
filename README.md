@@ -24,9 +24,11 @@ library(GPTLasso)
 
 ## Get Started
 
-### Input
+### Bioconductor-style Input
 
-![](figures/input.png){width="392"}
+GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
+
+![](figures/input.png)
 
 ### Tool
 
