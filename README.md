@@ -26,6 +26,8 @@ library(GPTLasso)
 
 ### Input
 
+![](figures/input.png){width="392"}
+
 ### Tool
 
 ``` r
