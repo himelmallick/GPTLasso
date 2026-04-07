@@ -26,7 +26,8 @@ gen_simmba_multistudy(
 )
 }
 \arguments{
-\item{nsample}{Number of samples per study.}
+\item{nsample}{Number of samples per study. May be a single value or a vector
+of length \code{nstudy}.}
 
 \item{nstudy}{Number of studies.}
 

@@ -9,6 +9,7 @@ cv.gptLasso(
   alpha_ptlasso_list = seq(0, 1, length = 11),
   family = c("gaussian", "binomial"),
   type.measure = c("default", "mse", "auc", "deviance"),
+  rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
   nfolds = 10,
   foldid = NULL,
   s = c("lambda.min", "lambda.1se"),
@@ -30,6 +31,8 @@ cv.gptLasso(
 \item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
 
 \item{type.measure}{Cross-validation metric used to compare transfer-learning levels.}
+
+\item{rho}{Multiview cooperative learning confusion stage parameter, a single value or vector.}
 
 \item{nfolds}{Number of folds used inside each \code{gptLasso()} fit.}
 

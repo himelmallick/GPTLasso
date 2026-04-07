@@ -7,6 +7,7 @@
 #' @param alpha_ptlasso_list Numeric vector of transfer-learning values to compare.
 #' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
 #' @param type.measure Cross-validation metric used to compare transfer-learning levels.
+#' @param rho Multiview cooperative learning confusion stage parameter, a single value or vector.
 #' @param nfolds Number of folds used inside each `gptLasso()` fit.
 #' @param foldid Optional stacked fold assignment across all studies.
 #' @param s Lambda rule used when summarizing CV performance.
@@ -68,12 +69,12 @@
 #' cv_fit_binomial$alpha_ptlasso_hat
 #' head(cv_fit_binomial$errpre)
 #' @export
-
 cv.gptLasso <- function(
     x,
     alpha_ptlasso_list = seq(0, 1, length = 11),
     family = c("gaussian", "binomial"),
     type.measure = c("default", "mse", "auc", "deviance"),
+    rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
     nfolds = 10,
     foldid = NULL,
     s = c("lambda.min", "lambda.1se"),
@@ -94,36 +95,41 @@ cv.gptLasso <- function(
   }
   s <- match.arg(s)
   alpha_ptlasso_hat.choice <- match.arg(alpha_ptlasso_hat.choice)
-
+  
   if (family == "binomial" && !(type.measure %in% c("auc", "deviance"))) {
     stop("For binomial family, type.measure must be 'auc' or 'deviance'.")
   }
   if (family == "gaussian" && !(type.measure %in% c("mse", "deviance"))) {
     stop("For gaussian family, type.measure must be 'mse' or 'deviance'.")
   }
-
+  
   alpha_ptlasso_list <- sort(unique(as.numeric(alpha_ptlasso_list)))
   if (length(alpha_ptlasso_list) < 2L ||
       any(is.na(alpha_ptlasso_list)) ||
       any(alpha_ptlasso_list < 0 | alpha_ptlasso_list > 1)) {
     stop("alpha_ptlasso_list must contain at least two values between 0 and 1.")
   }
-
+  rho <- unique(as.numeric(rho))
+  if (length(rho) < 1L || any(is.na(rho))) {
+    stop("rho must contain at least one numeric value.")
+  }
+  
   metric_rule <- ptmv_match_metric(type.measure)
   fit <- vector("list", length(alpha_ptlasso_list))
   err_rows <- vector("list", length(alpha_ptlasso_list))
-
+  
   for (ii in seq_along(alpha_ptlasso_list)) {
     alpha_ptlasso <- alpha_ptlasso_list[ii]
     if (verbose) {
       message(sprintf("alpha_ptlasso = %s", format(alpha_ptlasso)))
     }
-
+    
     fit[[ii]] <- gptLasso(
       x = x,
       alpha_ptlasso = alpha_ptlasso,
       family = family,
       type.measure = type.measure,
+      rho = rho,
       nfolds = nfolds,
       foldid = foldid,
       verbose = verbose,
@@ -134,10 +140,10 @@ cv.gptLasso <- function(
       ncores = ncores,
       ...
     )
-
+    
     if (is.null(fitoverall)) fitoverall <- fit[[ii]]$fitoverall
     if (is.null(fitind)) fitind <- fit[[ii]]$fitind
-
+    
     pred_pre <- lapply(seq_along(fit[[ii]]$fitpre), function(kk) {
       model <- fit[[ii]]$fitpre[[kk]]
       lambda <- ptmv_resolve_s(model, s)
@@ -145,7 +151,7 @@ cv.gptLasso <- function(
       as.numeric(model$fit.preval[, lam_idx])
     })
     names(pred_pre) <- fit[[ii]]$study_names
-
+    
     err_row <- c(
       overall = ptmv_metric_value(
         unlist(fit[[ii]]$training_layout$y, use.names = FALSE),
@@ -165,10 +171,10 @@ cv.gptLasso <- function(
     )
     err_rows[[ii]] <- err_row
   }
-
+  
   errpre <- cbind(alpha_ptlasso = alpha_ptlasso_list, do.call(rbind, err_rows))
   rownames(errpre) <- NULL
-
+  
   base_fit <- fit[[1]]
   overall_pred <- lapply(seq_along(base_fit$study_names), function(kk) {
     study_name <- base_fit$study_names[kk]
@@ -183,33 +189,38 @@ cv.gptLasso <- function(
     as.numeric(preds)
   })
   names(overall_pred) <- base_fit$study_names
-
+  
   ind_pred <- lapply(base_fit$study_names, function(study_name) {
     as.numeric(predict(base_fit$fitind[[study_name]], newx = base_fit$training_layout$x[[study_name]], s = s, type = "response"))
   })
   names(ind_pred) <- base_fit$study_names
-
+  
   erroverall <- ptmv_summarize_metric(overall_pred, base_fit$training_layout$y, family, type.measure, add_r2 = family == "gaussian")
   errind <- ptmv_summarize_metric(ind_pred, base_fit$training_layout$y, family, type.measure, add_r2 = family == "gaussian")
-
+  
   overall_idx <- if (alpha_ptlasso_hat.choice == "mean") {
     metric_rule$best(errpre[, "mean"])
   } else {
     metric_rule$best(errpre[, "overall"])
   }
   alpha_ptlasso_hat <- alpha_ptlasso_list[overall_idx]
+  selected_fit <- fit[[overall_idx]]
   varying.alpha_ptlasso_hat <- vapply(base_fit$study_names, function(study_name) {
     alpha_ptlasso_list[metric_rule$best(errpre[, paste0("group_", study_name)])]
   }, numeric(1))
-
+  
   out <- list(
     call = this.call,
     alpha_ptlasso_hat = alpha_ptlasso_hat,
     varying.alpha_ptlasso_hat = varying.alpha_ptlasso_hat,
     alpha_ptlasso_list = alpha_ptlasso_list,
+    rho = rho,
     errpre = errpre,
     errind = errind,
     erroverall = erroverall,
+    fitoverall.rho = selected_fit$fitoverall.rho,
+    fitind.rho = selected_fit$fitind.rho,
+    fitpre.rho = selected_fit$fitpre.rho,
     fitoverall = fitoverall,
     fitind = fitind,
     fit = fit,

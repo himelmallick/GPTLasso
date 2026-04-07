@@ -9,6 +9,7 @@ gptLasso(
   alpha_ptlasso = 0.5,
   family = c("gaussian", "binomial"),
   type.measure = c("default", "mse", "auc", "deviance"),
+  rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
   overall.lambda = c("lambda.1se", "lambda.min"),
   ind.lambda = c("lambda.1se", "lambda.min"),
   pre.lambda = c("lambda.1se", "lambda.min"),
@@ -37,6 +38,8 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 \item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
 
 \item{type.measure}{Cross-validation metric used inside the multiview fits.}
+
+\item{rho}{Multiview cooperative learning confusion stage parameter, a single value or vector.}
 
 \item{overall.lambda}{Lambda rule used for the stage-one overall model.}
 

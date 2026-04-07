@@ -12,6 +12,7 @@
 #' @param alpha_ptlasso Transfer-learning level in `[0, 1]`.
 #' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
 #' @param type.measure Cross-validation metric used inside the multiview fits.
+#' @param rho Multiview cooperative learning confusion stage parameter, a single value or vector.
 #' @param overall.lambda Lambda rule used for the stage-one overall model.
 #' @param ind.lambda Lambda rule used for the individual models.
 #' @param pre.lambda Lambda rule used for the pretrained models.
@@ -84,6 +85,7 @@ gptLasso <- function(
     alpha_ptlasso = 0.5,
     family = c("gaussian", "binomial"),
     type.measure = c("default", "mse", "auc", "deviance"),
+    rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
     overall.lambda = c("lambda.1se", "lambda.min"),
     ind.lambda = c("lambda.1se", "lambda.min"),
     pre.lambda = c("lambda.1se", "lambda.min"),
@@ -100,17 +102,17 @@ gptLasso <- function(
     ...
 ) {
   this.call <- match.call()
-
+  
   family <- match.arg(family)
   type.measure <- match.arg(type.measure)
   if (type.measure == "default") {
     type.measure <- if (family == "gaussian") "mse" else "deviance"
   }
-
+  
   overall.lambda <- match.arg(overall.lambda, c("lambda.1se", "lambda.min"))
   ind.lambda <- match.arg(ind.lambda, c("lambda.1se", "lambda.min"))
   pre.lambda <- match.arg(pre.lambda, c("lambda.1se", "lambda.min"))
-
+  
   if (!is.numeric(alpha_ptlasso) || length(alpha_ptlasso) != 1L ||
       alpha_ptlasso < 0 || alpha_ptlasso > 1) {
     stop("alpha_ptlasso must be a single number between 0 and 1.")
@@ -119,10 +121,14 @@ gptLasso <- function(
       alpha_glmnet < 0 || alpha_glmnet > 1) {
     stop("alpha_glmnet must be a single number between 0 and 1.")
   }
+  rho <- unique(as.numeric(rho))
+  if (length(rho) < 1L || any(is.na(rho))) {
+    stop("rho must contain at least one numeric value.")
+  }
   if (!is.numeric(nfolds) || length(nfolds) != 1L || nfolds < 2) {
     stop("nfolds must be a single integer greater than or equal to 2.")
   }
-
+  
   family_fn <- switch(family, gaussian = gaussian, binomial = binomial)
   input <- ptmv_normalize_container(x, require_y = TRUE, context = "x")
   x <- input$x
@@ -138,7 +144,7 @@ gptLasso <- function(
   x_list_all <- input$x_list_all
   y_all <- input$y_all
   groups_all <- input$groups_all
-
+  
   if (k == 1L) {
     message("Single-study input detected; falling back to cvar.multiview().")
     return(cvar.multiview(
@@ -146,6 +152,7 @@ gptLasso <- function(
       y = y[[1]],
       family = family_fn(),
       alpha = alpha_glmnet,
+      rho = rho,
       s = overall.lambda,
       nfolds = min(nfolds, length(y[[1]])),
       foldid = if (is.null(foldid)) NULL else ptmv_renumber_foldid(foldid),
@@ -155,7 +162,7 @@ gptLasso <- function(
       ...
     ))
   }
-
+  
   if (n_views == 1L) {
     message("Single-view multi-study input detected; falling back to ptLasso().")
     x_single <- x_list_all[[1]]
@@ -183,14 +190,14 @@ gptLasso <- function(
       ...
     ))
   }
-
+  
   if (is.null(penalty.factor)) {
     penalty.factor <- rep(1, p)
   }
   if (length(penalty.factor) != p) {
     stop(sprintf("penalty.factor must have length %d, the total number of features across views.", p))
   }
-
+  
   if (!is.null(fitoverall)) {
     valid_overall <- inherits(fitoverall, "cv.multiview") ||
       inherits(fitoverall, "cvar.multiview") ||
@@ -199,7 +206,7 @@ gptLasso <- function(
       stop("fitoverall must be a cv.multiview/cvar.multiview/cv.multiview.revised object.")
     }
   }
-
+  
   if (!is.null(fitind)) {
     if (length(fitind) != k) {
       stop("fitind must contain one model per study.")
@@ -214,7 +221,7 @@ gptLasso <- function(
       stop("All elements of fitind must be cv.multiview/cvar.multiview objects.")
     }
   }
-
+  
   if (is.null(foldid)) {
     foldid_all <- integer(N_all)
     start <- 1L
@@ -236,11 +243,11 @@ gptLasso <- function(
     foldid_all <- ptmv_renumber_foldid(foldid)
   }
   nfolds_all <- length(unique(foldid_all))
-
+  
   foldid_within <- split(foldid_all, groups_all)
   foldid_within <- lapply(foldid_within, ptmv_renumber_foldid)
   foldid_within <- foldid_within[study_names]
-
+  
   group_baseline <- ptmv_compute_group_baseline(y, family)
   baseline_offset_all <- NULL
   if (isTRUE(group.intercepts)) {
@@ -251,7 +258,7 @@ gptLasso <- function(
       family_obj = family_fn()
     )
   }
-
+  
   if (is.null(fitoverall)) {
     if (verbose) {
       message("Fitting overall multiview model.")
@@ -261,6 +268,7 @@ gptLasso <- function(
       y = y_all,
       family = family_fn(),
       alpha = alpha_glmnet,
+      rho = rho,
       s = overall.lambda,
       type.measure = type.measure,
       foldid = foldid_all,
@@ -271,7 +279,7 @@ gptLasso <- function(
       ...
     )
   }
-
+  
   fitoverall_fit <- fitoverall$multiview.fit
   lamhat <- fitoverall$lambda.choice
   rho_overall <- fitoverall$rho.choice
@@ -280,10 +288,10 @@ gptLasso <- function(
   lam_idx <- which.min(abs(rho_obj$lambda - lamhat))
   preval_all <- as.numeric(rho_obj$fit.preval[, lam_idx])
   preval.offset <- ptmv_split_vector_by_study(preval_all, n_by_study, study_names)
-
+  
   coef_vec <- as.numeric(coef(fitoverall_fit, s = lamhat))
   supall <- which(coef_vec[-1] != 0)
-
+  
   if (is.null(fitind)) {
     if (verbose) {
       message("Fitting individual multiview models.")
@@ -297,6 +305,7 @@ gptLasso <- function(
         y = y[[kk]],
         family = family_fn(),
         alpha = alpha_glmnet,
+        rho = rho,
         foldid = foldid_within[[kk]],
         s = ind.lambda,
         type.measure = type.measure,
@@ -306,11 +315,11 @@ gptLasso <- function(
     }, parallel = parallel, ncores = ncores, verbose = verbose)
     names(fitind) <- study_names
   }
-
+  
   if (verbose) {
     message("Fitting pretrained multiview models.")
   }
-
+  
   if (alpha_ptlasso == 1) {
     fitpre <- fitind
   } else {
@@ -330,6 +339,7 @@ gptLasso <- function(
         y = y[[kk]],
         family = family_fn(),
         alpha = alpha_glmnet,
+        rho = rho,
         foldid = foldid_within[[kk]],
         s = pre.lambda,
         type.measure = type.measure,
@@ -341,7 +351,7 @@ gptLasso <- function(
     }, parallel = parallel, ncores = ncores, verbose = verbose)
     names(fitpre) <- study_names
   }
-
+  
   out <- list(
     call = this.call,
     k = k,
@@ -355,6 +365,7 @@ gptLasso <- function(
     features_all = p,
     alpha_ptlasso = alpha_ptlasso,
     alpha_glmnet = alpha_glmnet,
+    rho = rho,
     family = family,
     type.measure = type.measure,
     overall.lambda = overall.lambda,
@@ -362,6 +373,12 @@ gptLasso <- function(
     pre.lambda = pre.lambda,
     fitoverall.lambda = lamhat,
     fitoverall.rho = rho_overall,
+    fitind.rho = stats::setNames(vapply(fitind, function(model) {
+      if (is.null(model$rho.choice)) NA_real_ else model$rho.choice
+    }, numeric(1)), study_names),
+    fitpre.rho = stats::setNames(vapply(fitpre, function(model) {
+      if (is.null(model$rho.choice)) NA_real_ else model$rho.choice
+    }, numeric(1)), study_names),
     group.intercepts = group.intercepts,
     group_baseline = group_baseline,
     foldid = foldid_all,
@@ -377,7 +394,7 @@ gptLasso <- function(
     parallel = parallel,
     ncores = max(1L, as.integer(ncores))
   )
-
+  
   class(out) <- "gptLasso"
   out
 }

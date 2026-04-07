@@ -5,7 +5,7 @@
 \title{Simulate binary multistudy multiview data for documentation examples}
 \usage{
 sim.binary.data(
-  nsample = 300,
+  nsample = c(500, 400, 300),
   nstudy = 3,
   snr = 5,
   rho.beta = 0.5,
@@ -26,7 +26,8 @@ sim.binary.data(
 )
 }
 \arguments{
-\item{nsample}{Number of samples per study.}
+\item{nsample}{Number of samples per study. May be a single value or a vector
+of length \code{nstudy}.}
 
 \item{nstudy}{Number of studies.}
 
