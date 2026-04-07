@@ -91,7 +91,7 @@ List of 3
  $ feature_metadata:'data.frame':       658 obs. of  2 variables:
 
 Sample metadata columns:
-[1] "subjectID" "Y"         "Xbeta"     "study"     "sample_id"
+[1] "subjectID" "Y" "study"   "sample_id"
 
 Study counts:
 
