@@ -4,6 +4,8 @@ This repository houses the R package for multistudy multimodal transfer learning
 
 It extends the `ptLasso` framework to support global multiview learning across multiple studies through cooperative-learning-based pretraining and transfer learning, with the current workflow centered on `gptLasso()` and `cv.gptLasso()`.
 
+![](figures/workflow.png)
+
 ## Background
 
 Modern biomedical prediction problems often involve multiple data modalities collected across several related cohorts, while each individual study may still be too small for stable model fitting. This project addresses that setting by combining multiview modeling with transfer learning so that information can be shared across both studies and modalities while still allowing study-specific refinement.
@@ -28,7 +30,13 @@ library(GPTLasso)
 
 GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
 
-![](figures/input.png)
+![](figures/Input.png)
+
+**Note on `study` Labels:**
+
+`gptLasso` detects the study levels directly from `x$sample_metadata$study`. The unique values in that column, in their observed order, define the groups used to split the training data, constract study-specific models, and organize prediction summaries.
+
+In this repository, `study` is the motivating example for handling different groups of data. In practice, users are welcome to define their own grouping variable in the same column, such as `area`, site, cohort, or any other project-tailored grouping that serves the scientific or operational goal of the analysis.
 
 ### Tool
 
@@ -38,6 +46,7 @@ fit <- gptLasso(
     alpha_ptlasso = 0.5,                                    # Transfer-learning level in `[0, 1]`
     family = c("gaussian", "binomial"),                     # Response family
     type.measure = c("default", "mse", "auc", "deviance"),  # Cross-validation metric used inside the multiview fits
+    rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),                   # Multiview cooperative learning confusion stage parameter, e.g., rho=0 -> early fusion
     overall.lambda = c("lambda.1se", "lambda.min"),         # Lambda rule used for the stage-one overall model
     ind.lambda = c("lambda.1se", "lambda.min"),             # Lambda rule used for the individual models
     pre.lambda = c("lambda.1se", "lambda.min"),             # Lambda rule used for the pretrained models
@@ -76,9 +85,9 @@ Example output:
 Gaussian x_train 
 ==============================
 List of 3
- $ feature_table   : num [1:658, 1:420] 0.0308 0.0189 0.4211 0.1075 0.33 ...
+ $ feature_table   : num [1:658, 1:840] 0.0261 0.0215 0.7405 0.0733 0.2195 ...
   ..- attr(*, "dimnames")=List of 2
- $ sample_metadata :'data.frame':       420 obs. of  5 variables:
+ $ sample_metadata :'data.frame':       840 obs. of  5 variables:
  $ feature_metadata:'data.frame':       658 obs. of  2 variables:
 
 Sample metadata columns:
@@ -87,7 +96,7 @@ Sample metadata columns:
 Study counts:
 
 Study_1 Study_2 Study_3 
-    140     140     140 
+    350     280     210 
 ```
 
 ### 2. Fit a multistudy multiview transfer-learning model with `cv.gptLasso()`
@@ -96,7 +105,8 @@ Study_1 Study_2 Study_3
 cv_fit <- cv.gptLasso(
   x = x_train,                                  # Training input
   family = "gaussian",                          # Response family
-  type.measure = "mse",                         # # Cross-validation metric used inside the multiview fits
+  type.measure = "mse",                         # Cross-validation metric used inside the multiview fits
+  rho = c(0, 0.5, 1),                           # Multiview cooperative learning fusion stage parameter
   alpha_ptlasso_list = seq(0, 1, length = 11),  # Numeric vector of transfer-learning values to compare
   nfolds = 10,                                  # Cross-validation fold
   verbose = TRUE                                # Track model fitting
@@ -106,32 +116,33 @@ cv_fit <- cv.gptLasso(
 Inspect the selected alpha and the performance grid:
 
 ``` r
-cv_fit$alpha_ptlasso_hat
-cv_fit$varying.alpha_ptlasso_hat
-cv_fit$errpre
+cv_fit$alpha_ptlasso_hat          # selected fixed transfer-learning value
+cv_fit$varying.alpha_ptlasso_hat  # study-specific transfer-learning values chosen from the same grid
+cv_fit$errpre                     # performance of pretrained model for each candidate alpha
+cv_fit$fitpre.rho                 # study-specific fusion stage value of pretrained model
 ```
 
 Example output:
 
 ``` text
 Gaussian cv.gptLasso() alpha grid summary:
-[1] 0.4
+[1] 0.8
 
 Study_1 Study_2 Study_3 
-    0.4     0.4     0.3 
+    1.0     0.6     0.6 
 
       alpha_ptlasso  overall     mean group_Study_1 group_Study_2 group_Study_3
- [1,]           0.0 17.37729 17.37729      16.89311      19.25987      15.97890
- [2,]           0.1 14.14973 14.14973      16.00852      14.15400      12.28666
- [3,]           0.2 12.44223 12.44223      14.36584      12.20872      10.75211
- [4,]           0.3 12.47641 12.47641      14.33569      12.41417      10.67936
- [5,]           0.4 11.75454 11.75454      13.41357      11.05694      10.79311
- [6,]           0.5 12.43800 12.43800      14.91034      11.56325      10.84039
- [7,]           0.6 12.10708 12.10708      13.86219      11.14541      11.31363
- [8,]           0.7 12.42077 12.42077      14.40414      11.88224      10.97594
- [9,]           0.8 12.34025 12.34025      14.25577      11.71032      11.05467
-[10,]           0.9 13.25401 13.25401      14.14932      12.04975      13.56297
-[11,]           1.0 12.70732 12.70732      14.93202      12.24143      10.94851
+ [1,]           0.0 13.92094 14.14564     12.675854      14.38881      15.37226
+ [2,]           0.1 12.75010 13.05121     11.217638      13.10503      14.83095
+ [3,]           0.2 12.25312 12.40972     11.222819      12.90437      13.10197
+ [4,]           0.3 11.40037 11.59173     10.283390      11.91201      12.57980
+ [5,]           0.4 10.97536 11.18962      9.780630      11.43652      12.35171
+ [6,]           0.5 10.52049 10.69164      9.374715      11.27168      11.42853
+ [7,]           0.6 10.47295 10.60504      9.702109      10.82588      11.28712
+ [8,]           0.7 10.66208 10.86011      9.551828      11.10027      11.92824
+ [9,]           0.8 10.32312 10.57686      8.858216      10.96920      11.90317
+[10,]           0.9 10.90699 11.23096      8.999471      11.80635      12.88705
+[11,]           1.0 11.16569 11.56169      8.703100      12.52686      13.45512
 ```
 
 ### 4. Predict on held-out data
@@ -147,25 +158,36 @@ pred <- predict(
 )
 ```
 
-Inspect the prediction object and held-out performance summary:
+Inspect the prediction object and compare held-out performance across all models from `metrics`:
 
 ``` r
 names(pred)
-pred$errpre
+pred$metrics$MSE
+pred$metrics$r2
 ```
 
 Example output:
 
 ``` text
-[1] "call" "alpha_ptlasso" "yhatoverall" "yhatind" "yhatpre"
-[6] "supoverall" "supind" "suppre.common" "suppre.individual"
-[10] "type.measure" "erroverall" "errind" "errpre"
+ [1] "call"              "alpha_ptlasso"     "yhatoverall"      
+ [4] "yhatind"           "yhatpre"           "supoverall"       
+ [7] "supind"            "suppre.common"     "suppre.individual"
+[10] "type.measure"      "metrics"           "erroverall"       
+[13] "errind"            "errpre"            "fit"
 
-Pretrained performance summary:
-    allGroups          mean group_Study_1 group_Study_2 group_Study_3 
-   13.4524277    13.4524277    12.7809198    19.1572324     8.4191310 
-          r^2 
-    0.6839485 
+         overall ind_group_Study_1 ind_group_Study_2 ind_group_Study_3 
+        16.572974          8.939839         13.491641         11.968390 
+   ind_group_mean pre_group_Study_1 pre_group_Study_2 pre_group_Study_3 
+        11.466623          8.939839         12.432750          9.877647 
+   pre_group_mean 
+        10.416746 
+        
+                  overall ind_group_Study_1 ind_group_Study_2 ind_group_Study_3 
+        0.5358854         0.7405784         0.6517837         0.6101880 
+   ind_group_mean pre_group_Study_1 pre_group_Study_2 pre_group_Study_3 
+        0.6675167         0.7405784         0.6791134         0.6782837 
+   pre_group_mean 
+        0.6993252 
 ```
 
 ## Citation
