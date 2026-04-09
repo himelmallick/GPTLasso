@@ -1,7 +1,3 @@
----
----
----
-
 # GPTLasso
 
 This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**.
