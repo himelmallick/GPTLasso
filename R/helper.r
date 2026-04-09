@@ -1103,51 +1103,43 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
   out
 }
 
-ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, family, type.measure) {
+# Helper: standardize held-out metric entries across prediction methods.
+# Rows correspond to model category and columns correspond to study mean and studies.
+ptmv_metric_entries <- function(preds, y, family, type.measure, metric_fun = ptmv_metric_value) {
   study_names <- names(y)
+  study_metric <- vapply(study_names, function(study_name) {
+    metric_fun(y[[study_name]], preds[[study_name]], family, type.measure)
+  }, numeric(1))
+  c(group_mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
+}
+
+# Helper: build the user-facing prediction metrics report.
+# Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
+ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, family, type.measure) {
   metric_name <- ptmv_metric_name(family, type.measure)
-  
-  build_entries <- function(preds, prefix) {
-    study_metric <- vapply(study_names, function(study_name) {
-      ptmv_metric_value(y[[study_name]], preds[[study_name]], family, type.measure)
-    }, numeric(1))
-    c(
-      stats::setNames(study_metric, paste0(prefix, "_group_", study_names)),
-      stats::setNames(mean(study_metric, na.rm = TRUE), paste0(prefix, "_group_mean"))
-    )
-  }
+  study_names <- names(y)
   
   metrics <- list()
-  metrics[[metric_name]] <- c(
-    overall = ptmv_metric_value(
-      unlist(y, use.names = FALSE),
-      unlist(overall_preds, use.names = FALSE),
-      family,
-      type.measure
-    ),
-    build_entries(ind_preds, "ind"),
-    build_entries(pre_preds, "pre")
+  metrics[[metric_name]] <- rbind(
+    overall = ptmv_metric_entries(overall_preds, y, family, type.measure),
+    ind = ptmv_metric_entries(ind_preds, y, family, type.measure),
+    pre = ptmv_metric_entries(pre_preds, y, family, type.measure)
   )
+  colnames(metrics[[metric_name]]) <- c("group_mean", study_names)
   
   if (family == "gaussian") {
-    build_r2_entries <- function(preds, prefix) {
-      study_r2 <- vapply(study_names, function(study_name) {
-        ptmv_r2_value(y[[study_name]], preds[[study_name]])
-      }, numeric(1))
-      c(
-        stats::setNames(study_r2, paste0(prefix, "_group_", study_names)),
-        stats::setNames(mean(study_r2, na.rm = TRUE), paste0(prefix, "_group_mean"))
-      )
-    }
-    
-    metrics[["r2"]] <- c(
-      overall = ptmv_r2_value(
-        unlist(y, use.names = FALSE),
-        unlist(overall_preds, use.names = FALSE)
-      ),
-      build_r2_entries(ind_preds, "ind"),
-      build_r2_entries(pre_preds, "pre")
+    metrics[["r2"]] <- rbind(
+      overall = ptmv_metric_entries(overall_preds, y, family, type.measure, metric_fun = function(y, pred, family, type.measure) {
+        ptmv_r2_value(y, pred)
+      }),
+      ind = ptmv_metric_entries(ind_preds, y, family, type.measure, metric_fun = function(y, pred, family, type.measure) {
+        ptmv_r2_value(y, pred)
+      }),
+      pre = ptmv_metric_entries(pre_preds, y, family, type.measure, metric_fun = function(y, pred, family, type.measure) {
+        ptmv_r2_value(y, pred)
+      })
     )
+    colnames(metrics[["r2"]]) <- c("group_mean", study_names)
   }
   
   metrics

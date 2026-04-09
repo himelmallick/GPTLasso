@@ -1,3 +1,7 @@
+---
+---
+---
+
 # GPTLasso
 
 This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**.
@@ -108,6 +112,7 @@ cv_fit <- cv.gptLasso(
   type.measure = "mse",                         # Cross-validation metric used inside the multiview fits
   rho = c(0, 0.5, 1),                           # Multiview cooperative learning fusion stage parameter
   alpha_ptlasso_list = seq(0, 1, length = 11),  # Numeric vector of transfer-learning values to compare
+  alpha_ptlasso_hat.choice = "mean",            # Fixed alpha_ptlasso_hat chosen via average study-level performance
   nfolds = 10,                                  # Cross-validation fold
   verbose = TRUE                                # Track model fitting
 )
@@ -118,31 +123,38 @@ Inspect the selected alpha and the performance grid:
 ``` r
 cv_fit$alpha_ptlasso_hat          # selected fixed transfer-learning value
 cv_fit$varying.alpha_ptlasso_hat  # study-specific transfer-learning values chosen from the same grid
-cv_fit$errpre                     # performance of pretrained model for each candidate alpha
 cv_fit$fitpre.rho                 # study-specific fusion stage value of pretrained model
+cv_fit$errpre                     # performance of pretrained model for each candidate alpha
 ```
 
 Example output:
 
 ``` text
 Gaussian cv.gptLasso() alpha grid summary:
-[1] 0.8
+$alpha_ptlasso_hat
+[1] 0.7
 
+$varying.alpha_ptlasso_hat
 Study_1 Study_2 Study_3 
-    1.0     0.6     0.6 
+    1.0     0.6     0.5 
 
+$fitpre.rho     
+Study_1 Study_2 Study_3 
+      0       0       0 
+
+$errpre
       alpha_ptlasso  overall     mean group_Study_1 group_Study_2 group_Study_3
- [1,]           0.0 13.92094 14.14564     12.675854      14.38881      15.37226
- [2,]           0.1 12.75010 13.05121     11.217638      13.10503      14.83095
- [3,]           0.2 12.25312 12.40972     11.222819      12.90437      13.10197
- [4,]           0.3 11.40037 11.59173     10.283390      11.91201      12.57980
- [5,]           0.4 10.97536 11.18962      9.780630      11.43652      12.35171
- [6,]           0.5 10.52049 10.69164      9.374715      11.27168      11.42853
- [7,]           0.6 10.47295 10.60504      9.702109      10.82588      11.28712
- [8,]           0.7 10.66208 10.86011      9.551828      11.10027      11.92824
- [9,]           0.8 10.32312 10.57686      8.858216      10.96920      11.90317
-[10,]           0.9 10.90699 11.23096      8.999471      11.80635      12.88705
-[11,]           1.0 11.16569 11.56169      8.703100      12.52686      13.45512
+ [1,]           0.0 14.21232 14.34574     13.049964      15.33618      14.65109
+ [2,]           0.1 12.88300 13.00876     11.834908      13.84734      13.34405
+ [3,]           0.2 11.70999 11.88744     10.485422      12.56207      12.61481
+ [4,]           0.3 11.24830 11.42809      9.944894      12.23705      12.10233
+ [5,]           0.4 10.83443 10.94534      9.852280      11.80047      11.18327
+ [6,]           0.5 10.85985 10.92767     10.039977      11.88921      10.85384
+ [7,]           0.6 10.66107 10.84207      9.653573      11.04704      11.82559
+ [8,]           0.7 10.52281 10.73124      9.190984      11.31054      11.69220
+ [9,]           0.8 10.91233 11.13524      9.354809      12.02115      12.02976
+[10,]           0.9 11.17494 11.34412      9.785988      12.43027      11.81609
+[11,]           1.0 11.27317 11.57239      9.065334      12.99588      12.65596
 ```
 
 ### 4. Predict on held-out data
@@ -169,25 +181,28 @@ pred$metrics$r2
 Example output:
 
 ``` text
- [1] "call"              "alpha_ptlasso"     "yhatoverall"      
- [4] "yhatind"           "yhatpre"           "supoverall"       
- [7] "supind"            "suppre.common"     "suppre.individual"
-[10] "type.measure"      "metrics"           "erroverall"       
-[13] "errind"            "errpre"            "fit"
+ [1] "call"                "alpha_ptlasso"       "yhatoverall"        
+ [4] "yhatind"             "yhatpre"             "supoverall"         
+ [7] "supind"              "suppre.common"       "suppre.individual"  
+[10] "type.measure"        "metrics"             "erroverall"         
+[13] "errind"              "errpre"              "fit"                
+[16] ".metric_predictions"
 
-         overall ind_group_Study_1 ind_group_Study_2 ind_group_Study_3 
-        16.572974          8.939839         13.491641         11.968390 
-   ind_group_mean pre_group_Study_1 pre_group_Study_2 pre_group_Study_3 
-        11.466623          8.939839         12.432750          9.877647 
-   pre_group_mean 
-        10.416746 
-        
-                  overall ind_group_Study_1 ind_group_Study_2 ind_group_Study_3 
-        0.5358854         0.7405784         0.6517837         0.6101880 
-   ind_group_mean pre_group_Study_1 pre_group_Study_2 pre_group_Study_3 
-        0.6675167         0.7405784         0.6791134         0.6782837 
-   pre_group_mean 
-        0.6993252 
+$MSE
+   overall_group_mean overall_group_Study_1 overall_group_Study_2 overall_group_Study_3
+            16.778888             15.903092             18.098437             16.335136
+   ind_group_mean     ind_group_Study_1     ind_group_Study_2     ind_group_Study_3
+            11.163868              9.114649             13.056764             11.320190
+   pre_group_mean     pre_group_Study_1     pre_group_Study_2     pre_group_Study_3
+            10.874819             9.114649              13.231669             10.278137
+
+$r2        
+   overall_group_mean overall_group_Study_1 overall_group_Study_2 overall_group_Study_3
+            0.5131201             0.5385146             0.5328833             0.4679625
+       ind_group_mean ind_group_Study_1     ind_group_Study_2     ind_group_Study_3
+            0.6766045         0.7355057             0.6630078             0.6312999
+    pre_group_mean    pre_group_Study_1     pre_group_Study_2     pre_group_Study_3
+            0.6864130         0.7355057             0.6584935             0.6652397
 ```
 
 ## Citation

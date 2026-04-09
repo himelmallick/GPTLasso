@@ -2,7 +2,7 @@
 % Please edit documentation in R/predict.r
 \name{predict.gptLasso}
 \alias{predict.gptLasso}
-\title{Predict from a multistudy multiview gptLasso fit}
+\title{Predict from a fitted multistudy multiview gptLasso model}
 \usage{
 \method{predict}{gptLasso}(
   object,
@@ -40,12 +40,13 @@ A \code{predict.gptLasso} object, stored as a list. Important components include
 \item \code{suppre.common}: stage-one support reused by the pretrained fits.
 \item \code{suppre.individual}: additional feature indices selected by the pretrained fits beyond \code{suppre.common}.
 \item \code{linkoverall}, \code{linkind}, \code{linkpre}: optional link-scale predictions when \code{return.link = TRUE}.
-\item \code{erroverall}, \code{errind}, \code{errpre}: optional performance summaries when \code{ytest} is supplied.
+\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 1)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{group_mean} plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
+\item \code{erroverall}, \code{errind}, \code{errpre}: backward-compatible performance summaries when \code{ytest} is supplied.
 }
 }
 \description{
-Generate overall, individual, and pretrained predictions from a \code{gptLasso}
-object on Bioconductor-style multistudy multiview test data.
+Generate held-out predictions from the overall, study-specific individual,
+and pretrained transfer models stored in a \code{gptLasso} fit.
 }
 \examples{
 # Gaussian prediction example

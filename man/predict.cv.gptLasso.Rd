@@ -42,13 +42,14 @@ A \code{predict.cv.gptLasso} object with the same prediction components as
 \item \code{alpha_ptlasso}: the chosen transfer-learning value, either fixed or study-specific.
 \item \code{fit}: the originating \code{cv.gptLasso} object.
 }
-When \code{ytest} is supplied, the returned object also includes \code{erroverall},
-\code{errind}, and \code{errpre}.
+When \code{ytest} is supplied, the returned object also includes \code{metrics},
+\code{erroverall}, \code{errind}, and \code{errpre}. Each metric table has rows \code{overall},
+\code{ind}, and \code{pre}, and columns \code{group_mean} plus one column per study.
 }
 \description{
 Resolve one fixed or varying transfer-learning choice from a \code{cv.gptLasso}
-object and generate predictions on Bioconductor-style multistudy multiview
-test data.
+object and generate held-out predictions from the corresponding overall,
+individual, and pretrained models.
 }
 \examples{
 # Gaussian cross-validated prediction example

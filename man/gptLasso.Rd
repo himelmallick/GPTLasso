@@ -2,7 +2,7 @@
 % Please edit documentation in R/gptLasso.R
 \name{gptLasso}
 \alias{gptLasso}
-\title{Fit gptLasso for multistudy multiview data}
+\title{Fit the multistudy multiview gptLasso pipeline}
 \usage{
 gptLasso(
   x,
@@ -37,9 +37,9 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 
 \item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
 
-\item{type.measure}{Cross-validation metric used inside the multiview fits.}
+\item{type.measure}{Cross-validation metric optimized inside the multiview fits.}
 
-\item{rho}{Multiview cooperative learning confusion stage parameter, a single value or vector.}
+\item{rho}{Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.}
 
 \item{overall.lambda}{Lambda rule used for the stage-one overall model.}
 
@@ -53,9 +53,9 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 
 \item{verbose}{Should progress messages be printed?}
 
-\item{fitoverall}{Optional pre-fit overall multiview model.}
+\item{fitoverall}{Optional pre-fit overall multiview model to reuse.}
 
-\item{fitind}{Optional pre-fit list of individual multiview models.}
+\item{fitind}{Optional pre-fit list of study-specific multiview models to reuse.}
 
 \item{penalty.factor}{Optional penalty factors across concatenated views.}
 
@@ -86,9 +86,8 @@ A \code{gptLasso} object, stored as a list. Important components include:
 }
 }
 \description{
-Train the multiview transfer-learning workflow using a Bioconductor-style
-input container with \code{feature_table}, \code{sample_metadata}, and
-\code{feature_metadata}.
+Fit the overall, study-specific individual, and pretrained transfer models
+for a Bioconductor-style multistudy multiview input container.
 }
 \examples{
 # Gaussian example

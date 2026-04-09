@@ -1,8 +1,7 @@
-#' Fit gptLasso for multistudy multiview data
+#' Fit the multistudy multiview gptLasso pipeline
 #'
-#' Train the multiview transfer-learning workflow using a Bioconductor-style
-#' input container with `feature_table`, `sample_metadata`, and
-#' `feature_metadata`.
+#' Fit the overall, study-specific individual, and pretrained transfer models
+#' for a Bioconductor-style multistudy multiview input container.
 #'
 #' @param x A named list with entries `feature_table`, `sample_metadata`, and
 #'   `feature_metadata`. The feature table must be feature-by-sample, the sample
@@ -11,16 +10,16 @@
 #'   `featureType`.
 #' @param alpha_ptlasso Transfer-learning level in `[0, 1]`.
 #' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
-#' @param type.measure Cross-validation metric used inside the multiview fits.
-#' @param rho Multiview cooperative learning confusion stage parameter, a single value or vector.
+#' @param type.measure Cross-validation metric optimized inside the multiview fits.
+#' @param rho Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.
 #' @param overall.lambda Lambda rule used for the stage-one overall model.
 #' @param ind.lambda Lambda rule used for the individual models.
 #' @param pre.lambda Lambda rule used for the pretrained models.
 #' @param foldid Optional stacked fold assignment across all studies.
 #' @param nfolds Number of folds used when `foldid` is not supplied.
 #' @param verbose Should progress messages be printed?
-#' @param fitoverall Optional pre-fit overall multiview model.
-#' @param fitind Optional pre-fit list of individual multiview models.
+#' @param fitoverall Optional pre-fit overall multiview model to reuse.
+#' @param fitind Optional pre-fit list of study-specific multiview models to reuse.
 #' @param penalty.factor Optional penalty factors across concatenated views.
 #' @param group.intercepts Should study-specific stage-one baselines be used.
 #' @param alpha_glmnet Elastic-net mixing parameter passed to the multiview base learner, default is 1 indicating Lasso regression.

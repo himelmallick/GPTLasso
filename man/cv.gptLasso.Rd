@@ -2,7 +2,7 @@
 % Please edit documentation in R/cv.gptLasso.r
 \name{cv.gptLasso}
 \alias{cv.gptLasso}
-\title{Cross-validation for multistudy multiview gptLasso}
+\title{Cross-validate the multistudy multiview gptLasso pipeline}
 \usage{
 cv.gptLasso(
   x,
@@ -32,7 +32,7 @@ cv.gptLasso(
 
 \item{type.measure}{Cross-validation metric used to compare transfer-learning levels.}
 
-\item{rho}{Multiview cooperative learning confusion stage parameter, a single value or vector.}
+\item{rho}{Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.}
 
 \item{nfolds}{Number of folds used inside each \code{gptLasso()} fit.}
 
@@ -46,7 +46,7 @@ cv.gptLasso(
 
 \item{fitoverall}{Optional pre-fit overall multiview model reused across alphas.}
 
-\item{fitind}{Optional pre-fit list of individual multiview models reused across alphas.}
+\item{fitind}{Optional pre-fit list of study-specific multiview models reused across alphas.}
 
 \item{group.intercepts}{Should study-specific stage-one baselines be used?}
 
@@ -62,7 +62,7 @@ A \code{cv.gptLasso} object, stored as a list. Important components include:
 \item \code{alpha_ptlasso_hat}: the selected fixed transfer-learning value.
 \item \code{varying.alpha_ptlasso_hat}: study-specific transfer-learning values chosen from the same grid.
 \item \code{alpha_ptlasso_list}: the candidate transfer-learning grid that was evaluated.
-\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, including overall, mean, and study-specific columns.
+\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, including pooled, mean, and study-specific columns.
 \item \code{errind}: performance summary for the individual study fits on the training layout.
 \item \code{erroverall}: performance summary for the pooled stage-one fit on the training layout.
 \item \code{fitoverall}: the shared overall fit reused across the alpha grid.
@@ -73,8 +73,8 @@ A \code{cv.gptLasso} object, stored as a list. Important components include:
 }
 }
 \description{
-Run \code{gptLasso()} across a grid of transfer-learning \code{alpha_ptlasso} values
-and select the best value using held-out performance.
+Refit \code{gptLasso()} over a grid of transfer-learning values and summarize the
+pretrained performance profile used to select the final \code{alpha_ptlasso}.
 }
 \examples{
 # Gaussian cross-validation example

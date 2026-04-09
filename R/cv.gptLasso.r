@@ -1,20 +1,20 @@
-#' Cross-validation for multistudy multiview gptLasso
+#' Cross-validate the multistudy multiview gptLasso pipeline
 #'
-#' Run `gptLasso()` across a grid of transfer-learning `alpha_ptlasso` values
-#' and select the best value using held-out performance.
+#' Refit `gptLasso()` over a grid of transfer-learning values and summarize the
+#' pretrained performance profile used to select the final `alpha_ptlasso`.
 #'
 #' @param x A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
 #' @param alpha_ptlasso_list Numeric vector of transfer-learning values to compare.
 #' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
 #' @param type.measure Cross-validation metric used to compare transfer-learning levels.
-#' @param rho Multiview cooperative learning confusion stage parameter, a single value or vector.
+#' @param rho Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.
 #' @param nfolds Number of folds used inside each `gptLasso()` fit.
 #' @param foldid Optional stacked fold assignment across all studies.
 #' @param s Lambda rule used when summarizing CV performance.
 #' @param alpha_ptlasso_hat.choice Whether to choose the final alpha using overall or mean performance.
 #' @param verbose Should progress messages be printed?
 #' @param fitoverall Optional pre-fit overall multiview model reused across alphas.
-#' @param fitind Optional pre-fit list of individual multiview models reused across alphas.
+#' @param fitind Optional pre-fit list of study-specific multiview models reused across alphas.
 #' @param group.intercepts Should study-specific stage-one baselines be used?
 #' @param parallel Logical; if `TRUE`, allow study-level parallel fits where available.
 #' @param ncores Number of worker cores for study-level parallel fits.
@@ -25,7 +25,7 @@
 #'   \item `alpha_ptlasso_hat`: the selected fixed transfer-learning value.
 #'   \item `varying.alpha_ptlasso_hat`: study-specific transfer-learning values chosen from the same grid.
 #'   \item `alpha_ptlasso_list`: the candidate transfer-learning grid that was evaluated.
-#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, including overall, mean, and study-specific columns.
+#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, including pooled, mean, and study-specific columns.
 #'   \item `errind`: performance summary for the individual study fits on the training layout.
 #'   \item `erroverall`: performance summary for the pooled stage-one fit on the training layout.
 #'   \item `fitoverall`: the shared overall fit reused across the alpha grid.

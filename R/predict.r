@@ -1,7 +1,7 @@
-#' Predict from a multistudy multiview gptLasso fit
+#' Predict from a fitted multistudy multiview gptLasso model
 #'
-#' Generate overall, individual, and pretrained predictions from a `gptLasso`
-#' object on Bioconductor-style multistudy multiview test data.
+#' Generate held-out predictions from the overall, study-specific individual,
+#' and pretrained transfer models stored in a `gptLasso` fit.
 #'
 #' @param object A fitted `gptLasso` object.
 #' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
@@ -21,7 +21,8 @@
 #'   \item `suppre.common`: stage-one support reused by the pretrained fits.
 #'   \item `suppre.individual`: additional feature indices selected by the pretrained fits beyond `suppre.common`.
 #'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions when `return.link = TRUE`.
-#'   \item `erroverall`, `errind`, `errpre`: optional performance summaries when `ytest` is supplied.
+#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, or `metrics$deviance` as a `3 x (k + 1)` table with rows `overall`, `ind`, and `pre`, and columns `group_mean` plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
+#'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance summaries when `ytest` is supplied.
 #' }
 #'
 #' @examples
@@ -153,8 +154,9 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
   
   pre_offsets <- lapply(stage1_link, function(x) (1 - object$alpha_ptlasso) * x)
   linkpre <- ptmv_predict_by_study(object$fitpre, xtest_split, s = s, type = "link", offsets = pre_offsets)
+  yhatpre_resp <- ptmv_predict_by_study(object$fitpre, xtest_split, s = s, type = "response", offsets = pre_offsets)
   yhatpre <- if (type == "class") {
-    ptmv_predict_by_study(object$fitpre, xtest_split, s = s, type = "response", offsets = pre_offsets)
+    yhatpre_resp
   } else {
     ptmv_predict_by_study(object$fitpre, xtest_split, s = s, type = type, offsets = pre_offsets)
   }
@@ -163,8 +165,9 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
   }
   
   linkind <- ptmv_predict_by_study(object$fitind, xtest_split, s = s, type = "link")
+  yhatind_resp <- ptmv_predict_by_study(object$fitind, xtest_split, s = s, type = "response")
   yhatind <- if (type == "class") {
-    ptmv_predict_by_study(object$fitind, xtest_split, s = s, type = "response")
+    yhatind_resp
   } else {
     ptmv_predict_by_study(object$fitind, xtest_split, s = s, type = type)
   }
@@ -177,11 +180,19 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
   suppre.common <- ptmv_get_support(object$fitoverall, object$fitoverall.lambda)
   suppre.individual <- setdiff(ptmv_get_union_support(object$fitpre, s), suppre.common)
   
-  erroverall <- errind <- errpre <- NULL
+  metrics <- erroverall <- errind <- errpre <- NULL
   if (!is.null(ytest)) {
     erroverall <- ptmv_summarize_metric(overall_resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
-    errind <- ptmv_summarize_metric(yhatind, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
-    errpre <- ptmv_summarize_metric(yhatpre, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    errind <- ptmv_summarize_metric(yhatind_resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    errpre <- ptmv_summarize_metric(yhatpre_resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    metrics <- ptmv_build_metric_report(
+      overall_preds = overall_resp,
+      ind_preds = yhatind_resp,
+      pre_preds = yhatpre_resp,
+      y = ytest,
+      family = object$family,
+      type.measure = object$type.measure
+    )
   }
   
   ptmv_build_prediction_object(
@@ -198,9 +209,15 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
     linkoverall = if (return.link) overall_link else NULL,
     linkind = if (return.link) linkind else NULL,
     linkpre = if (return.link) linkpre else NULL,
+    metrics = metrics,
     erroverall = erroverall,
     errind = errind,
     errpre = errpre,
+    metric_predictions = if (!is.null(ytest)) {
+      list(overall = overall_resp, ind = yhatind_resp, pre = yhatpre_resp)
+    } else {
+      NULL
+    },
     class_name = "predict.gptLasso"
   )
 }
@@ -208,8 +225,8 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #' Predict from a cross-validated multistudy multiview gptLasso fit
 #'
 #' Resolve one fixed or varying transfer-learning choice from a `cv.gptLasso`
-#' object and generate predictions on Bioconductor-style multistudy multiview
-#' test data.
+#' object and generate held-out predictions from the corresponding overall,
+#' individual, and pretrained models.
 #'
 #' @param object A fitted `cv.gptLasso` object.
 #' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
@@ -227,8 +244,9 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #'   \item `alpha_ptlasso`: the chosen transfer-learning value, either fixed or study-specific.
 #'   \item `fit`: the originating `cv.gptLasso` object.
 #' }
-#' When `ytest` is supplied, the returned object also includes `erroverall`,
-#' `errind`, and `errpre`.
+#' When `ytest` is supplied, the returned object also includes `metrics`,
+#' `erroverall`, `errind`, and `errpre`. Each metric table has rows `overall`,
+#' `ind`, and `pre`, and columns `group_mean` plus one column per study.
 #'
 #' @examples
 #' # Gaussian cross-validated prediction example
@@ -389,15 +407,37 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
     pred_by_alpha[[as.character(alpha_ptlasso[[study_name]])]]$suppre.individual
   }))))
   
-  erroverall <- errind <- errpre <- NULL
+  metrics <- erroverall <- errind <- errpre <- NULL
   if (!is.null(ytest)) {
     xtest_norm <- ptmv_normalize_newdata(xtest, object$fit[[1]]$training_layout)
     ytest_norm <- ptmv_prepare_ytest(ytest, names(alpha_ptlasso), study_sizes = xtest_norm$n_by_study)
     family <- object$family
     type.measure <- object$type.measure
-    erroverall <- ptmv_summarize_metric(yhatoverall, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
-    errind <- ptmv_summarize_metric(yhatind, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
-    errpre <- ptmv_summarize_metric(yhatpre, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
+    metric_preds <- lapply(pred_by_alpha, function(pred) pred$.metric_predictions)
+    overall_metric_preds <- lapply(names(alpha_ptlasso), function(study_name) {
+      key <- as.character(alpha_ptlasso[[study_name]])
+      metric_preds[[key]]$overall[[study_name]]
+    })
+    ind_metric_preds <- lapply(names(alpha_ptlasso), function(study_name) {
+      key <- as.character(alpha_ptlasso[[study_name]])
+      metric_preds[[key]]$ind[[study_name]]
+    })
+    pre_metric_preds <- lapply(names(alpha_ptlasso), function(study_name) {
+      key <- as.character(alpha_ptlasso[[study_name]])
+      metric_preds[[key]]$pre[[study_name]]
+    })
+    names(overall_metric_preds) <- names(ind_metric_preds) <- names(pre_metric_preds) <- names(alpha_ptlasso)
+    erroverall <- ptmv_summarize_metric(overall_metric_preds, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
+    errind <- ptmv_summarize_metric(ind_metric_preds, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
+    errpre <- ptmv_summarize_metric(pre_metric_preds, ytest_norm, family, type.measure, add_r2 = family == "gaussian")
+    metrics <- ptmv_build_metric_report(
+      overall_preds = overall_metric_preds,
+      ind_preds = ind_metric_preds,
+      pre_preds = pre_metric_preds,
+      y = ytest_norm,
+      family = family,
+      type.measure = type.measure
+    )
   }
   
   ptmv_build_prediction_object(
@@ -414,10 +454,16 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
     linkoverall = linkoverall,
     linkind = linkind,
     linkpre = linkpre,
+    metrics = metrics,
     erroverall = erroverall,
     errind = errind,
     errpre = errpre,
     fit = object,
+    metric_predictions = if (!is.null(ytest)) {
+      list(overall = overall_metric_preds, ind = ind_metric_preds, pre = pre_metric_preds)
+    } else {
+      NULL
+    },
     class_name = "predict.cv.gptLasso"
   )
 }
