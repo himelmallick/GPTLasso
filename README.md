@@ -34,19 +34,19 @@ GPTLasso requires a `x` as a named list containing `feature_table`, `sample_meta
 
 **Note on `study` Labels:**
 
-`gptLasso` detects the study levels directly from `x$sample_metadata$study`. The unique values in that column, in their observed order, define the groups used to split the training data, constract study-specific models, and organize prediction summaries.
+`gptLasso` detects the study levels directly from `x$sample_metadata$study`. The unique values in that column, in their observed order, define the groups used to split the training data, construct study-specific models, and organize prediction summaries.
 
-In this repository, `study` is the motivating example for handling different groups of data. In practice, users are welcome to define their own grouping variable in the same column, such as `area`, site, cohort, or any other project-tailored grouping that serves the scientific or operational goal of the analysis.
+In this repository, `study` is the motivating example for handling different groups of data. In practice, users are welcome to define their own project-tailored grouping that serves the scientific or operational goal of the analysis.
 
 ### Tool
 
 ``` r
 fit <- gptLasso(
     x,                                                      # Input
-    alpha_ptlasso = 0.5,                                    # Transfer-learning level in `[0, 1]`
+    alpha.ptlasso = 0.5,                                    # Transfer-learning level in `[0, 1]`
     family = c("gaussian", "binomial"),                     # Response family
     type.measure = c("default", "mse", "auc", "deviance"),  # Cross-validation metric used inside the multiview fits
-    rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),                   # Multiview cooperative learning confusion stage parameter, e.g., rho=0 -> early fusion
+    rho = seq(0, 1, length = 11),                           # Multiview cooperative learning confusion stage parameter, e.g., rho=0 -> early fusion
     overall.lambda = c("lambda.1se", "lambda.min"),         # Lambda rule used for the stage-one overall model
     ind.lambda = c("lambda.1se", "lambda.min"),             # Lambda rule used for the individual models
     pre.lambda = c("lambda.1se", "lambda.min"),             # Lambda rule used for the pretrained models
@@ -106,9 +106,11 @@ cv_fit <- cv.gptLasso(
   x = x_train,                                  # Training input
   family = "gaussian",                          # Response family
   type.measure = "mse",                         # Cross-validation metric used inside the multiview fits
-  rho = c(0, 0.5, 1),                           # Multiview cooperative learning fusion stage parameter
+  rho = seq(0, 1, length = 11),                 # Multiview cooperative learning fusion stage parameter
   alpha_ptlasso_list = seq(0, 1, length = 11),  # Numeric vector of transfer-learning values to compare
-  alpha_ptlasso_hat.choice = "mean",            # Fixed alpha_ptlasso_hat chosen via average study-level performance
+  overall.lambda = "lambda.min",                # Lambda rule for the overall model when summarizing CV performance
+  ind.lambda = "lambda.1se"",                   # Lambda rule for individual models when summarizing CV performance
+  pre.lambda = "lambda.1se"",                   # Lambda rule for pretrained models when summarizing CV performance
   nfolds = 10,                                  # Cross-validation fold
   verbose = TRUE                                # Track model fitting
 )
@@ -117,8 +119,8 @@ cv_fit <- cv.gptLasso(
 Inspect the selected alpha and the performance grid:
 
 ``` r
-cv_fit$alpha_ptlasso_hat          # selected fixed transfer-learning value
-cv_fit$varying.alpha_ptlasso_hat  # study-specific transfer-learning values chosen from the same grid
+cv_fit$alpha.ptlasso.hat          # selected fixed transfer-learning value
+cv_fit$varying.alpha.ptlasso.hat  # study-specific transfer-learning values chosen from the same grid
 cv_fit$fitpre.rho                 # study-specific fusion stage value of pretrained model
 cv_fit$errpre                     # performance of pretrained model for each candidate alpha
 ```
@@ -132,25 +134,25 @@ $alpha_ptlasso_hat
 
 $varying.alpha_ptlasso_hat
 Study_1 Study_2 Study_3 
-    1.0     0.6     0.5 
+    0.9     0.7     0.5 
 
 $fitpre.rho     
 Study_1 Study_2 Study_3 
       0       0       0 
 
 $errpre
-      alpha_ptlasso  overall     mean group_Study_1 group_Study_2 group_Study_3
- [1,]           0.0 14.21232 14.34574     13.049964      15.33618      14.65109
- [2,]           0.1 12.88300 13.00876     11.834908      13.84734      13.34405
- [3,]           0.2 11.70999 11.88744     10.485422      12.56207      12.61481
- [4,]           0.3 11.24830 11.42809      9.944894      12.23705      12.10233
- [5,]           0.4 10.83443 10.94534      9.852280      11.80047      11.18327
- [6,]           0.5 10.85985 10.92767     10.039977      11.88921      10.85384
- [7,]           0.6 10.66107 10.84207      9.653573      11.04704      11.82559
- [8,]           0.7 10.52281 10.73124      9.190984      11.31054      11.69220
- [9,]           0.8 10.91233 11.13524      9.354809      12.02115      12.02976
-[10,]           0.9 11.17494 11.34412      9.785988      12.43027      11.81609
-[11,]           1.0 11.27317 11.57239      9.065334      12.99588      12.65596
+      alpha.ptlasso  overall   Study_1  Study_2  Study_3
+ [1,]           0.0 14.03710 13.412574 14.49092 14.47287
+ [2,]           0.1 13.63681 13.167783 15.11919 12.44201
+ [3,]           0.2 12.82442 12.230995 14.00321 12.24173
+ [4,]           0.3 12.37466 11.604362 14.14203 11.30200
+ [5,]           0.4 11.79183 11.192177 12.86076 11.36603
+ [6,]           0.5 11.24072 10.529173 12.37608 10.91283
+ [7,]           0.6 11.52092 10.984110 11.91002 11.89679
+ [8,]           0.7 10.86896  9.824687 11.58203 11.65865
+ [9,]           0.8 11.46745 10.174606 12.23097 12.60418
+[10,]           0.9 11.09571  9.419960 12.05290 12.61238
+[11,]           1.0 11.77155 10.061710 12.72820 13.34573
 ```
 
 ### 4. Predict on held-out data
@@ -160,8 +162,11 @@ pred <- predict(
   cv_fit,
   xtest = x_test,
   ytest = y_test,
-  alpha_ptlasso =  NULL,          # Optional user-specified transfer-learning choice. May be one value or one per study
-  alpha_ptlasso_type = "varying", # Either `"fixed"` or `"varying", when `alpha_ptlasso` is not supplied
+  alpha.ptlasso = NULL,           # Optional user-specified transfer-learning choice. May be one value or one per study
+  alpha.ptlasso.type = "varying", # Either `"fixed"` or `"varying"` when `alpha.ptlasso` is not supplied
+  overall.lambda = "lambda.min",  # Lambda rule for overall-model prediction
+  ind.lambda = "lambda.1se",      # Lambda rule for individual-model prediction
+  pre.lambda = "lambda.1se",      # Lambda rule for pretrained-model prediction
   type = "response"
 )
 ```
@@ -185,20 +190,16 @@ Example output:
 [16] ".metric_predictions"
 
 $MSE
-   overall_group_mean overall_group_Study_1 overall_group_Study_2 overall_group_Study_3
-            16.778888             15.903092             18.098437             16.335136
-   ind_group_mean     ind_group_Study_1     ind_group_Study_2     ind_group_Study_3
-            11.163868              9.114649             13.056764             11.320190
-   pre_group_mean     pre_group_Study_1     pre_group_Study_2     pre_group_Study_3
-            10.874819             9.114649              13.231669             10.278137
+           mean   Study_1  Study_2  Study_3
+overall 17.08658 16.180830 17.03689 18.04201
+ind     10.85992  9.220399 12.22695 11.13242
+pre     10.49054  9.001969 11.74396 10.72569
 
 $r2        
-   overall_group_mean overall_group_Study_1 overall_group_Study_2 overall_group_Study_3
-            0.5131201             0.5385146             0.5328833             0.4679625
-       ind_group_mean ind_group_Study_1     ind_group_Study_2     ind_group_Study_3
-            0.6766045         0.7355057             0.6630078             0.6312999
-    pre_group_mean    pre_group_Study_1     pre_group_Study_2     pre_group_Study_3
-            0.6864130         0.7355057             0.6584935             0.6652397
+             mean   Study_1   Study_2   Study_3
+overall 0.5010353 0.5304551 0.5602815 0.4123694
+ind     0.6847592 0.7324370 0.6844250 0.6374158
+pre     0.6954432 0.7387755 0.6968909 0.6506630
 ```
 
 ## Citation

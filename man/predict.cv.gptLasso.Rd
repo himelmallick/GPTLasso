@@ -8,10 +8,12 @@
   object,
   xtest,
   ytest = NULL,
-  alpha_ptlasso = NULL,
-  alpha_ptlasso_type = c("fixed", "varying"),
+  alpha.ptlasso = NULL,
+  alpha.ptlasso.type = c("fixed", "varying"),
   type = c("link", "response", "class"),
-  s = c("lambda.min", "lambda.1se"),
+  overall.lambda = c("lambda.min", "lambda.1se"),
+  ind.lambda = c("lambda.min", "lambda.1se"),
+  pre.lambda = c("lambda.min", "lambda.1se"),
   return.link = FALSE,
   ...
 )
@@ -23,13 +25,17 @@
 
 \item{ytest}{Optional list of response vectors used to compute performance summaries.}
 
-\item{alpha_ptlasso}{Optional user-specified transfer-learning choice. May be one value or one per study.}
+\item{alpha.ptlasso}{Optional user-specified transfer-learning choice. May be one value or one per study.}
 
-\item{alpha_ptlasso_type}{Either \code{"fixed"} or \code{"varying"} when \code{alpha_ptlasso} is not supplied.}
+\item{alpha.ptlasso.type}{Either \code{"fixed"} or \code{"varying"} when \code{alpha.ptlasso} is not supplied.}
 
 \item{type}{Prediction scale: \code{"link"}, \code{"response"}, or \code{"class"} for binomial fits.}
 
-\item{s}{Lambda rule used for prediction.}
+\item{overall.lambda}{Lambda rule used for overall-model prediction.}
+
+\item{ind.lambda}{Lambda rule used for individual-model prediction.}
+
+\item{pre.lambda}{Lambda rule used for pretrained-model prediction.}
 
 \item{return.link}{Should link-scale predictions also be returned?}
 
@@ -39,12 +45,12 @@
 A \code{predict.cv.gptLasso} object with the same prediction components as
 \code{predict.gptLasso()}, plus:
 \itemize{
-\item \code{alpha_ptlasso}: the chosen transfer-learning value, either fixed or study-specific.
+\item \code{alpha.ptlasso}: the chosen transfer-learning value, either fixed or study-specific.
 \item \code{fit}: the originating \code{cv.gptLasso} object.
 }
 When \code{ytest} is supplied, the returned object also includes \code{metrics},
 \code{erroverall}, \code{errind}, and \code{errpre}. Each metric table has rows \code{overall},
-\code{ind}, and \code{pre}, and columns \code{group_mean} plus one column per study.
+\code{ind}, and \code{pre}, and columns \code{mean} plus one column per study.
 }
 \description{
 Resolve one fixed or varying transfer-learning choice from a \code{cv.gptLasso}
@@ -63,7 +69,7 @@ cv_fit_gaussian <- cv.gptLasso(
   x = x_train,
   family = "gaussian",
   type.measure = "mse",
-  alpha_ptlasso_list = c(0, 0.5, 1),
+  alpha.ptlasso.list = c(0, 0.5, 1),
   nfolds = 3
 )
 
@@ -71,11 +77,11 @@ pred_cv_gaussian <- predict(
   cv_fit_gaussian,
   xtest = x_test,
   ytest = ytest,
-  alpha_ptlasso_type = "fixed",
+  alpha.ptlasso.type = "fixed",
   type = "response"
 )
 
-pred_cv_gaussian$alpha_ptlasso
+pred_cv_gaussian$alpha.ptlasso
 pred_cv_gaussian$errpre
 
 # Binomial cross-validated prediction example
@@ -89,7 +95,7 @@ cv_fit_binomial <- cv.gptLasso(
   x = x_train_bin,
   family = "binomial",
   type.measure = "auc",
-  alpha_ptlasso_list = c(0, 0.5, 1),
+  alpha.ptlasso.list = c(0, 0.5, 1),
   nfolds = 3
 )
 
@@ -97,9 +103,9 @@ pred_cv_binomial <- predict(
   cv_fit_binomial,
   xtest = x_test_bin,
   ytest = ytest_bin,
-  alpha_ptlasso_type = "fixed",
+  alpha.ptlasso.type = "fixed",
   type = "response"
 )
 
-pred_cv_binomial$fit$alpha_ptlasso_hat
+pred_cv_binomial$fit$alpha.ptlasso.hat
 }

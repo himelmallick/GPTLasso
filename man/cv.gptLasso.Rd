@@ -6,14 +6,15 @@
 \usage{
 cv.gptLasso(
   x,
-  alpha_ptlasso_list = seq(0, 1, length = 11),
+  alpha.ptlasso.list = seq(0, 1, length = 11),
   family = c("gaussian", "binomial"),
   type.measure = c("default", "mse", "auc", "deviance"),
-  rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
+  rho = seq(0, 1, length = 11),
   nfolds = 10,
   foldid = NULL,
-  s = c("lambda.min", "lambda.1se"),
-  alpha_ptlasso_hat.choice = c("overall", "mean"),
+  overall.lambda = c("lambda.min", "lambda.1se"),
+  ind.lambda = c("lambda.min", "lambda.1se"),
+  pre.lambda = c("lambda.min", "lambda.1se"),
   verbose = FALSE,
   fitoverall = NULL,
   fitind = NULL,
@@ -26,7 +27,7 @@ cv.gptLasso(
 \arguments{
 \item{x}{A named list with \code{feature_table}, \code{sample_metadata}, and \code{feature_metadata}.}
 
-\item{alpha_ptlasso_list}{Numeric vector of transfer-learning values to compare.}
+\item{alpha.ptlasso.list}{Numeric vector of transfer-learning values to compare.}
 
 \item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
 
@@ -38,9 +39,11 @@ cv.gptLasso(
 
 \item{foldid}{Optional stacked fold assignment across all studies.}
 
-\item{s}{Lambda rule used when summarizing CV performance.}
+\item{overall.lambda}{Lambda rule used for the overall model when summarizing CV performance.}
 
-\item{alpha_ptlasso_hat.choice}{Whether to choose the final alpha using overall or mean performance.}
+\item{ind.lambda}{Lambda rule used for the individual models when summarizing CV performance.}
+
+\item{pre.lambda}{Lambda rule used for the pretrained models when summarizing CV performance.}
 
 \item{verbose}{Should progress messages be printed?}
 
@@ -59,22 +62,21 @@ cv.gptLasso(
 \value{
 A \code{cv.gptLasso} object, stored as a list. Important components include:
 \itemize{
-\item \code{alpha_ptlasso_hat}: the selected fixed transfer-learning value.
-\item \code{varying.alpha_ptlasso_hat}: study-specific transfer-learning values chosen from the same grid.
-\item \code{alpha_ptlasso_list}: the candidate transfer-learning grid that was evaluated.
-\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, including pooled, mean, and study-specific columns.
+\item \code{alpha.ptlasso.hat}: the selected fixed transfer-learning value.
+\item \code{varying.alpha.ptlasso.hat}: study-specific transfer-learning values chosen from the same grid.
+\item \code{alpha.ptlasso.list}: the candidate transfer-learning grid that was evaluated.
+\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, with pooled and study-specific columns.
 \item \code{errind}: performance summary for the individual study fits on the training layout.
 \item \code{erroverall}: performance summary for the pooled stage-one fit on the training layout.
 \item \code{fitoverall}: the shared overall fit reused across the alpha grid.
 \item \code{fitind}: the shared list of individual study fits reused across the alpha grid.
-\item \code{fit}: the list of \code{gptLasso} objects corresponding to \code{alpha_ptlasso_list}.
-\item \code{s}: the lambda rule used when summarizing candidate performance.
-\item \code{alpha_ptlasso_hat.choice}: whether selection was based on the overall or mean metric.
+\item \code{fit}: the list of \code{gptLasso} objects corresponding to \code{alpha.ptlasso.list}.
+\item \code{overall.lambda}, \code{ind.lambda}, \code{pre.lambda}: lambda rules used when summarizing candidate performance.
 }
 }
 \description{
 Refit \code{gptLasso()} over a grid of transfer-learning values and summarize the
-pretrained performance profile used to select the final \code{alpha_ptlasso}.
+pretrained performance profile used to select the final \code{alpha.ptlasso}.
 }
 \examples{
 # Gaussian cross-validation example
@@ -86,12 +88,12 @@ cv_fit_gaussian <- cv.gptLasso(
   x = x_train,
   family = "gaussian",
   type.measure = "mse",
-  alpha_ptlasso_list = c(0, 0.5, 1),
+  alpha.ptlasso.list = c(0, 0.5, 1),
   nfolds = 3
 )
 
-cv_fit_gaussian$alpha_ptlasso_hat
-cv_fit_gaussian$varying.alpha_ptlasso_hat
+cv_fit_gaussian$alpha.ptlasso.hat
+cv_fit_gaussian$varying.alpha.ptlasso.hat
 cv_fit_gaussian$errpre
 
 # Binomial cross-validation example
@@ -103,10 +105,10 @@ cv_fit_binomial <- cv.gptLasso(
   x = x_train_bin,
   family = "binomial",
   type.measure = "auc",
-  alpha_ptlasso_list = c(0, 0.5, 1),
+  alpha.ptlasso.list = c(0, 0.5, 1),
   nfolds = 3
 )
 
-cv_fit_binomial$alpha_ptlasso_hat
+cv_fit_binomial$alpha.ptlasso.hat
 head(cv_fit_binomial$errpre)
 }

@@ -8,7 +8,7 @@
 #'   metadata must contain `sample_id`, `study`, and `Y`, and the feature
 #'   metadata must contain `featureID` plus a view-mapping column such as
 #'   `featureType`.
-#' @param alpha_ptlasso Transfer-learning level in `[0, 1]`.
+#' @param alpha.ptlasso Transfer-learning level in `[0, 1]`.
 #' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
 #' @param type.measure Cross-validation metric optimized inside the multiview fits.
 #' @param rho Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.
@@ -22,24 +22,24 @@
 #' @param fitind Optional pre-fit list of study-specific multiview models to reuse.
 #' @param penalty.factor Optional penalty factors across concatenated views.
 #' @param group.intercepts Should study-specific stage-one baselines be used.
-#' @param alpha_glmnet Elastic-net mixing parameter passed to the multiview base learner, default is 1 indicating Lasso regression.
+#' @param alpha.glmnet Elastic-net mixing parameter passed to the multiview base learner, default is 1 indicating Lasso regression.
 #' @param parallel Logical; if `TRUE`, allow study-level parallel fits where available.
 #' @param ncores Number of worker cores for study-level parallel fits.
 #' @param ... Additional arguments forwarded to the multiview base fitter.
 #'
 #' @return A `gptLasso` object, stored as a list. Important components include:
 #' \itemize{
-#'   \item `study_names`: study labels detected from `x$sample_metadata$study`.
-#'   \item `view_names`: view labels detected from `x$feature_metadata`.
-#'   \item `n_by_study`: number of samples in each study.
-#'   \item `alpha_ptlasso`: the transfer-learning level used for the fit.
+#'   \item `study.names`: study labels detected from `x$sample_metadata$study`.
+#'   \item `view.names`: view labels detected from `x$feature_metadata`.
+#'   \item `n.by.study`: number of samples in each study.
+#'   \item `alpha.ptlasso`: the transfer-learning level used for the fit.
 #'   \item `fitoverall`: the pooled multiview stage-one fit.
 #'   \item `fitind`: a named list of study-specific individual fits.
 #'   \item `fitpre`: a named list of study-specific pretrained transfer fits.
 #'   \item `support.vars`: feature indices selected by the overall stage-one fit.
-#'   \item `group_baseline`: study-level baseline offsets used when `group.intercepts = TRUE`.
+#'   \item `group.baseline`: study-level baseline offsets used when `group.intercepts = TRUE`.
 #'   \item `preval.offset`: study-wise stage-one linear predictors reused as offsets in pretraining.
-#'   \item `training_layout`: the normalized training container split by study and view.
+#'   \item `training.layout`: the normalized training container split by study and view.
 #' }
 #'
 #' @examples
@@ -51,16 +51,16 @@
 #'
 #' fit_gaussian <- gptLasso(
 #'   x = x_train,
-#'   alpha_ptlasso = 0.5,
+#'   alpha.ptlasso = 0.5,
 #'   family = "gaussian",
 #'   type.measure = "mse",
 #'   nfolds = 3
 #' )
 #'
 #' names(fit_gaussian)
-#' fit_gaussian$study_names
-#' fit_gaussian$view_names
-#' fit_gaussian$n_by_study
+#' fit_gaussian$study.names
+#' fit_gaussian$view.names
+#' fit_gaussian$n.by.study
 #' fit_gaussian$support.vars
 #'
 #' # Binomial example
@@ -70,21 +70,21 @@
 #'
 #' fit_binomial <- gptLasso(
 #'   x = x_train_bin,
-#'   alpha_ptlasso = 0.5,
+#'   alpha.ptlasso = 0.5,
 #'   family = "binomial",
 #'   type.measure = "auc",
 #'   nfolds = 3
 #' )
 #'
 #' names(fit_binomial)
-#' fit_binomial$group_baseline
+#' fit_binomial$group.baseline
 #' @export
 gptLasso <- function(
     x,
-    alpha_ptlasso = 0.5,
+    alpha.ptlasso = 0.5,
     family = c("gaussian", "binomial"),
     type.measure = c("default", "mse", "auc", "deviance"),
-    rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
+    rho = seq(0, 1, length = 11),
     overall.lambda = c("lambda.1se", "lambda.min"),
     ind.lambda = c("lambda.1se", "lambda.min"),
     pre.lambda = c("lambda.1se", "lambda.min"),
@@ -95,12 +95,23 @@ gptLasso <- function(
     fitind = NULL,
     penalty.factor = NULL,
     group.intercepts = TRUE,
-    alpha_glmnet = 1,
+    alpha.glmnet = 1,
     parallel = FALSE,
     ncores = 1L,
     ...
 ) {
   this.call <- match.call()
+  dot.args <- list(...)
+  legacy.names <- c("alpha_ptlasso", "alpha_glmnet")
+  bad.args <- intersect(names(dot.args), legacy.names)
+  if (length(bad.args) > 0L) {
+    stop(
+      sprintf(
+        "Legacy underscore argument(s) not supported in gptLasso(): %s. Use dot-style names instead.",
+        paste(bad.args, collapse = ", ")
+      )
+    )
+  }
   
   family <- match.arg(family)
   type.measure <- match.arg(type.measure)
@@ -112,13 +123,13 @@ gptLasso <- function(
   ind.lambda <- match.arg(ind.lambda, c("lambda.1se", "lambda.min"))
   pre.lambda <- match.arg(pre.lambda, c("lambda.1se", "lambda.min"))
   
-  if (!is.numeric(alpha_ptlasso) || length(alpha_ptlasso) != 1L ||
-      alpha_ptlasso < 0 || alpha_ptlasso > 1) {
-    stop("alpha_ptlasso must be a single number between 0 and 1.")
+  if (!is.numeric(alpha.ptlasso) || length(alpha.ptlasso) != 1L ||
+      alpha.ptlasso < 0 || alpha.ptlasso > 1) {
+    stop("alpha.ptlasso must be a single number between 0 and 1.")
   }
-  if (!is.numeric(alpha_glmnet) || length(alpha_glmnet) != 1L ||
-      alpha_glmnet < 0 || alpha_glmnet > 1) {
-    stop("alpha_glmnet must be a single number between 0 and 1.")
+  if (!is.numeric(alpha.glmnet) || length(alpha.glmnet) != 1L ||
+      alpha.glmnet < 0 || alpha.glmnet > 1) {
+    stop("alpha.glmnet must be a single number between 0 and 1.")
   }
   rho <- unique(as.numeric(rho))
   if (length(rho) < 1L || any(is.na(rho))) {
@@ -147,10 +158,10 @@ gptLasso <- function(
   if (k == 1L) {
     message("Single-study input detected; falling back to cvar.multiview().")
     return(cvar.multiview(
-      x_list = x[[1]],
+      x.list = x[[1]],
       y = y[[1]],
       family = family_fn(),
-      alpha = alpha_glmnet,
+      alpha = alpha.glmnet,
       rho = rho,
       s = overall.lambda,
       nfolds = min(nfolds, length(y[[1]])),
@@ -172,7 +183,7 @@ gptLasso <- function(
       x = x_single,
       y = y_all,
       groups = groups_all,
-      alpha = alpha_ptlasso,
+      alpha = alpha.ptlasso,
       family = family,
       type.measure = type.measure,
       use.case = "inputGroups",
@@ -183,7 +194,7 @@ gptLasso <- function(
       penalty.factor = penalty.factor,
       fitoverall = fitoverall,
       fitind = fitind,
-      en.alpha = alpha_glmnet,
+      en.alpha = alpha.glmnet,
       group.intercepts = group.intercepts,
       parallel = parallel,
       ...
@@ -263,10 +274,10 @@ gptLasso <- function(
       message("Fitting overall multiview model.")
     }
     fitoverall <- cvar.multiview(
-      x_list = x_list_all,
+      x.list = x_list_all,
       y = y_all,
       family = family_fn(),
-      alpha = alpha_glmnet,
+      alpha = alpha.glmnet,
       rho = rho,
       s = overall.lambda,
       type.measure = type.measure,
@@ -300,10 +311,10 @@ gptLasso <- function(
         message(sprintf("  Study %d / %d", kk, k))
       }
       cvar.multiview(
-        x_list = x[[kk]],
+        x.list = x[[kk]],
         y = y[[kk]],
         family = family_fn(),
-        alpha = alpha_glmnet,
+        alpha = alpha.glmnet,
         rho = rho,
         foldid = foldid_within[[kk]],
         s = ind.lambda,
@@ -319,30 +330,30 @@ gptLasso <- function(
     message("Fitting pretrained multiview models.")
   }
   
-  if (alpha_ptlasso == 1) {
+  if (alpha.ptlasso == 1) {
     fitpre <- fitind
   } else {
     fitpre <- ptmv_maybe_parallel_lapply(seq_len(k), function(kk) {
       if (verbose) {
         message(sprintf("  Pretrained model %d / %d", kk, k))
       }
-      alpha_eff <- max(alpha_ptlasso, 1e-9)
+      alpha_eff <- max(alpha.ptlasso, 1e-9)
       fac <- rep(1 / alpha_eff, p)
       fac[supall] <- 1
       pf <- penalty.factor * fac
-      if (alpha_ptlasso == 0 && length(supall) == 0L) {
+      if (alpha.ptlasso == 0 && length(supall) == 0L) {
         pf <- penalty.factor * rep(1e9, p)
       }
       cvar.multiview(
-        x_list = x[[kk]],
+        x.list = x[[kk]],
         y = y[[kk]],
         family = family_fn(),
-        alpha = alpha_glmnet,
+        alpha = alpha.glmnet,
         rho = rho,
         foldid = foldid_within[[kk]],
         s = pre.lambda,
         type.measure = type.measure,
-        offset = (1 - alpha_ptlasso) * preval.offset[[kk]],
+        offset = (1 - alpha.ptlasso) * preval.offset[[kk]],
         penalty.factor = pf,
         keep = TRUE,
         ...
@@ -354,16 +365,16 @@ gptLasso <- function(
   out <- list(
     call = this.call,
     k = k,
-    N_all = N_all,
-    n_by_study = n_by_study,
-    study_names = study_names,
+    N.all = N_all,
+    n.by.study = n_by_study,
+    study.names = study_names,
     group.levels = study_names,
-    view_names = view_names,
-    n_views = n_views,
-    p_by_view = p_by_view,
-    features_all = p,
-    alpha_ptlasso = alpha_ptlasso,
-    alpha_glmnet = alpha_glmnet,
+    view.names = view_names,
+    n.views = n_views,
+    p.by.view = p_by_view,
+    features.all = p,
+    alpha.ptlasso = alpha.ptlasso,
+    alpha.glmnet = alpha.glmnet,
     rho = rho,
     family = family,
     type.measure = type.measure,
@@ -379,7 +390,7 @@ gptLasso <- function(
       if (is.null(model$rho.choice)) NA_real_ else model$rho.choice
     }, numeric(1)), study_names),
     group.intercepts = group.intercepts,
-    group_baseline = group_baseline,
+    group.baseline = group_baseline,
     foldid = foldid_all,
     foldid.within = foldid_within,
     support.vars = supall,
@@ -387,9 +398,9 @@ gptLasso <- function(
     fitoverall = fitoverall,
     fitind = fitind,
     fitpre = fitpre,
-    baseline_offset = baseline_offset_all,
+    baseline.offset = baseline_offset_all,
     preval.offset = preval.offset,
-    training_layout = input,
+    training.layout = input,
     parallel = parallel,
     ncores = max(1L, as.integer(ncores))
   )

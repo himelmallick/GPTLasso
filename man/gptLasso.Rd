@@ -6,10 +6,10 @@
 \usage{
 gptLasso(
   x,
-  alpha_ptlasso = 0.5,
+  alpha.ptlasso = 0.5,
   family = c("gaussian", "binomial"),
   type.measure = c("default", "mse", "auc", "deviance"),
-  rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
+  rho = seq(0, 1, length = 11),
   overall.lambda = c("lambda.1se", "lambda.min"),
   ind.lambda = c("lambda.1se", "lambda.min"),
   pre.lambda = c("lambda.1se", "lambda.min"),
@@ -20,7 +20,7 @@ gptLasso(
   fitind = NULL,
   penalty.factor = NULL,
   group.intercepts = TRUE,
-  alpha_glmnet = 1,
+  alpha.glmnet = 1,
   parallel = FALSE,
   ncores = 1L,
   ...
@@ -33,7 +33,7 @@ metadata must contain \code{sample_id}, \code{study}, and \code{Y}, and the feat
 metadata must contain \code{featureID} plus a view-mapping column such as
 \code{featureType}.}
 
-\item{alpha_ptlasso}{Transfer-learning level in \verb{[0, 1]}.}
+\item{alpha.ptlasso}{Transfer-learning level in \verb{[0, 1]}.}
 
 \item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
 
@@ -61,7 +61,7 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 
 \item{group.intercepts}{Should study-specific stage-one baselines be used.}
 
-\item{alpha_glmnet}{Elastic-net mixing parameter passed to the multiview base learner, default is 1 indicating Lasso regression.}
+\item{alpha.glmnet}{Elastic-net mixing parameter passed to the multiview base learner, default is 1 indicating Lasso regression.}
 
 \item{parallel}{Logical; if \code{TRUE}, allow study-level parallel fits where available.}
 
@@ -72,17 +72,17 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 \value{
 A \code{gptLasso} object, stored as a list. Important components include:
 \itemize{
-\item \code{study_names}: study labels detected from \code{x$sample_metadata$study}.
-\item \code{view_names}: view labels detected from \code{x$feature_metadata}.
-\item \code{n_by_study}: number of samples in each study.
-\item \code{alpha_ptlasso}: the transfer-learning level used for the fit.
+\item \code{study.names}: study labels detected from \code{x$sample_metadata$study}.
+\item \code{view.names}: view labels detected from \code{x$feature_metadata}.
+\item \code{n.by.study}: number of samples in each study.
+\item \code{alpha.ptlasso}: the transfer-learning level used for the fit.
 \item \code{fitoverall}: the pooled multiview stage-one fit.
 \item \code{fitind}: a named list of study-specific individual fits.
 \item \code{fitpre}: a named list of study-specific pretrained transfer fits.
 \item \code{support.vars}: feature indices selected by the overall stage-one fit.
-\item \code{group_baseline}: study-level baseline offsets used when \code{group.intercepts = TRUE}.
+\item \code{group.baseline}: study-level baseline offsets used when \code{group.intercepts = TRUE}.
 \item \code{preval.offset}: study-wise stage-one linear predictors reused as offsets in pretraining.
-\item \code{training_layout}: the normalized training container split by study and view.
+\item \code{training.layout}: the normalized training container split by study and view.
 }
 }
 \description{
@@ -98,16 +98,16 @@ str(x_train)
 
 fit_gaussian <- gptLasso(
   x = x_train,
-  alpha_ptlasso = 0.5,
+  alpha.ptlasso = 0.5,
   family = "gaussian",
   type.measure = "mse",
   nfolds = 3
 )
 
 names(fit_gaussian)
-fit_gaussian$study_names
-fit_gaussian$view_names
-fit_gaussian$n_by_study
+fit_gaussian$study.names
+fit_gaussian$view.names
+fit_gaussian$n.by.study
 fit_gaussian$support.vars
 
 # Binomial example
@@ -117,12 +117,12 @@ x_train_bin <- sim_dat_bin$x_train
 
 fit_binomial <- gptLasso(
   x = x_train_bin,
-  alpha_ptlasso = 0.5,
+  alpha.ptlasso = 0.5,
   family = "binomial",
   type.measure = "auc",
   nfolds = 3
 )
 
 names(fit_binomial)
-fit_binomial$group_baseline
+fit_binomial$group.baseline
 }

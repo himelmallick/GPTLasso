@@ -9,7 +9,9 @@
   xtest,
   ytest = NULL,
   type = c("link", "response", "class"),
-  s = c("lambda.min", "lambda.1se"),
+  overall.lambda = c("lambda.min", "lambda.1se"),
+  ind.lambda = c("lambda.min", "lambda.1se"),
+  pre.lambda = c("lambda.min", "lambda.1se"),
   return.link = FALSE,
   ...
 )
@@ -23,7 +25,11 @@
 
 \item{type}{Prediction scale: \code{"link"}, \code{"response"}, or \code{"class"} for binomial fits.}
 
-\item{s}{Lambda rule used for prediction.}
+\item{overall.lambda}{Lambda rule used for overall-model prediction.}
+
+\item{ind.lambda}{Lambda rule used for individual-model prediction.}
+
+\item{pre.lambda}{Lambda rule used for pretrained-model prediction.}
 
 \item{return.link}{Should link-scale predictions also be returned?}
 
@@ -40,7 +46,7 @@ A \code{predict.gptLasso} object, stored as a list. Important components include
 \item \code{suppre.common}: stage-one support reused by the pretrained fits.
 \item \code{suppre.individual}: additional feature indices selected by the pretrained fits beyond \code{suppre.common}.
 \item \code{linkoverall}, \code{linkind}, \code{linkpre}: optional link-scale predictions when \code{return.link = TRUE}.
-\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 1)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{group_mean} plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
+\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 1)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{mean} plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
 \item \code{erroverall}, \code{errind}, \code{errpre}: backward-compatible performance summaries when \code{ytest} is supplied.
 }
 }
@@ -58,7 +64,7 @@ ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
 
 fit_gaussian <- gptLasso(
   x = x_train,
-  alpha_ptlasso = 0.5,
+  alpha.ptlasso = 0.5,
   family = "gaussian",
   type.measure = "mse",
   nfolds = 3
@@ -84,7 +90,7 @@ ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$stud
 
 fit_binomial <- gptLasso(
   x = x_train_bin,
-  alpha_ptlasso = 0.5,
+  alpha.ptlasso = 0.5,
   family = "binomial",
   type.measure = "auc",
   nfolds = 3

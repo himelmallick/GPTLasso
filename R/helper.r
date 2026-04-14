@@ -559,7 +559,7 @@ sim.binary.data <- function(nsample = c(500, 400, 300),
 }
 
 # Helper: choose whether a metric should be minimized or maximized.
-# Used in `cv.gptLasso()` when selecting `alpha_ptlasso_hat`.
+# Used in `cv.gptLasso()` when selecting `alpha.ptlasso.hat`.
 ptmv_match_metric <- function(type.measure) {
   if (type.measure %in% c("auc")) {
     list(best = which.max, aggregate = max)
@@ -1084,9 +1084,8 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
   all_y <- unlist(y, use.names = FALSE)
   all_pred <- unlist(preds, use.names = FALSE)
   out <- c(
-    allGroups = ptmv_metric_value(all_y, all_pred, family, type.measure),
-    mean = mean(study_err, na.rm = TRUE),
-    setNames(study_err, paste0("group_", study_names))
+    overall = ptmv_metric_value(all_y, all_pred, family, type.measure),
+    setNames(study_err, study_names)
   )
   
   if (add_r2 && family == "gaussian") {
@@ -1096,8 +1095,7 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
     out <- c(
       out,
       "r^2" = ptmv_r2_value(all_y, all_pred),
-      "r^2_mean" = mean(study_r2, na.rm = TRUE),
-      setNames(study_r2, paste0("r^2_group_", study_names))
+      setNames(study_r2, paste0("r^2.", study_names))
     )
   }
   out
@@ -1110,7 +1108,7 @@ ptmv_metric_entries <- function(preds, y, family, type.measure, metric_fun = ptm
   study_metric <- vapply(study_names, function(study_name) {
     metric_fun(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
-  c(group_mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
+  c(mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
 }
 
 # Helper: build the user-facing prediction metrics report.
@@ -1125,7 +1123,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
     ind = ptmv_metric_entries(ind_preds, y, family, type.measure),
     pre = ptmv_metric_entries(pre_preds, y, family, type.measure)
   )
-  colnames(metrics[[metric_name]]) <- c("group_mean", study_names)
+  colnames(metrics[[metric_name]]) <- c("mean", study_names)
   
   if (family == "gaussian") {
     metrics[["r2"]] <- rbind(
@@ -1139,7 +1137,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
         ptmv_r2_value(y, pred)
       })
     )
-    colnames(metrics[["r2"]]) <- c("group_mean", study_names)
+    colnames(metrics[["r2"]]) <- c("mean", study_names)
   }
   
   metrics
@@ -1147,7 +1145,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
 
 # Helper: assemble a common prediction object for direct-fit and cv-fit methods.
 # Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
-ptmv_build_prediction_object <- function(call, alpha_ptlasso, type.measure,
+ptmv_build_prediction_object <- function(call, alpha.ptlasso, type.measure,
                                          yhatoverall, yhatind, yhatpre,
                                          supoverall, supind, suppre.common, suppre.individual,
                                          linkoverall = NULL, linkind = NULL, linkpre = NULL,
@@ -1157,7 +1155,7 @@ ptmv_build_prediction_object <- function(call, alpha_ptlasso, type.measure,
                                          class_name = "predict.gptLasso") {
   out <- list(
     call = call,
-    alpha_ptlasso = alpha_ptlasso,
+    alpha.ptlasso = alpha.ptlasso,
     yhatoverall = yhatoverall,
     yhatind = yhatind,
     yhatpre = yhatpre,

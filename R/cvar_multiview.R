@@ -1,4 +1,4 @@
-cvar.multiview <- function(x_list, y,
+cvar.multiview <- function(x.list, y,
                            family = gaussian(),
                            alpha = c(0, seq(0.05, 0.95, 0.05), 1),
                            rho = c(0, 0.1, 0.25, 0.5, 1, 5, 10),
@@ -16,12 +16,12 @@ cvar.multiview <- function(x_list, y,
                            seed = NULL,
                            verbose = FALSE,
                            ...) {
-
-  mv_fit <- function(x_list, y, family, alpha, rho, lambda = NULL,
+  
+  mv_fit <- function(x.list, y, family, alpha, rho, lambda = NULL,
                      weights = NULL, offset = NULL,
                      penalty.factor = NULL, trace.it = 0, ...) {
     args <- list(
-      x_list = x_list,
+      x_list = x.list,
       y = y,
       family = family,
       alpha = alpha,
@@ -35,16 +35,16 @@ cvar.multiview <- function(x_list, y,
     if (!is.null(penalty.factor)) {
       args$penalty.factor <- penalty.factor
     }
-
+    
     fit_once <- function(extra = list()) {
       do.call(multiview::multiview, c(args, extra))
     }
-
+    
     out <- tryCatch(fit_once(), error = function(e) e)
     if (!inherits(out, "error")) {
       return(out)
     }
-
+    
     msg <- conditionMessage(out)
     if (grepl("cannot correct step size", msg, fixed = TRUE)) {
       out2 <- tryCatch(
@@ -55,10 +55,10 @@ cvar.multiview <- function(x_list, y,
         return(out2)
       }
     }
-
+    
     stop(out)
   }
-
+  
   make_stratified_foldid <- function(y01, K) {
     y01 <- as.integer(y01)
     if (!all(y01 %in% c(0L, 1L))) {
@@ -66,16 +66,16 @@ cvar.multiview <- function(x_list, y,
     }
     idx0 <- which(y01 == 0L)
     idx1 <- which(y01 == 1L)
-
+    
     f0 <- sample(rep(seq_len(K), length.out = length(idx0)))
     f1 <- sample(rep(seq_len(K), length.out = length(idx1)))
-
+    
     fid <- integer(length(y01))
     fid[idx0] <- f0
     fid[idx1] <- f1
     fid
   }
-
+  
   validate_binomial_folds <- function(y01, fid) {
     K <- max(fid)
     for (f in seq_len(K)) {
@@ -90,26 +90,26 @@ cvar.multiview <- function(x_list, y,
     }
     invisible(TRUE)
   }
-
-  build_predmat_mv <- function(outlist, lambda, x_list, offset, foldid,
+  
+  build_predmat_mv <- function(outlist, lambda, x.list, offset, foldid,
                                alignment = c("lambda", "fraction"),
                                family, type = "response", ...) {
     alignment <- match.arg(alignment)
-    N <- nrow(x_list[[1L]])
-
+    N <- nrow(x.list[[1L]])
+    
     if (!is.null(offset)) {
       offset <- drop(offset)
     }
-
+    
     predmat <- matrix(NA_real_, N, length(lambda))
     nlambda <- length(lambda)
-
+    
     for (f in seq_len(max(foldid))) {
       which <- foldid == f
       fitobj <- outlist[[f]]
-      x_sub_list <- lapply(x_list, function(x) x[which, , drop = FALSE])
+      x_sub_list <- lapply(x.list, function(x) x[which, , drop = FALSE])
       offset_sub <- if (is.null(offset)) NULL else offset[which]
-
+      
       preds <- switch(
         alignment,
         fraction = predict(fitobj, newx = x_sub_list, newoffset = offset_sub,
@@ -117,24 +117,24 @@ cvar.multiview <- function(x_list, y,
         lambda = predict(fitobj, newx = x_sub_list, s = lambda,
                          newoffset = offset_sub, type = type, ...)
       )
-
+      
       nlami <- min(ncol(preds), nlambda)
       predmat[which, seq_len(nlami)] <- preds[, seq_len(nlami), drop = FALSE]
       if (nlami < nlambda) {
         predmat[which, (nlami + 1L):nlambda] <- preds[, nlami]
       }
     }
-
-    dimnames(predmat) <- list(rownames(x_list[[1L]]), paste0("s", seq_len(nlambda)))
+    
+    dimnames(predmat) <- list(rownames(x.list[[1L]]), paste0("s", seq_len(nlambda)))
     attr(predmat, "family") <- family
     predmat
   }
-
+  
   score_fold_metric <- function(y_test, preds_fold, family_name, type.measure) {
     if (type.measure == "mse") {
       return(colMeans((as.numeric(y_test) - preds_fold)^2))
     }
-
+    
     if (type.measure == "deviance") {
       if (family_name == "gaussian") {
         return(colMeans((as.numeric(y_test) - preds_fold)^2))
@@ -149,7 +149,7 @@ cvar.multiview <- function(x_list, y,
       }
       stop("type.measure='deviance' currently implemented for gaussian/binomial only.")
     }
-
+    
     if (type.measure == "auc") {
       return(apply(preds_fold, 2, function(p) {
         if (length(unique(stats::na.omit(y_test))) < 2L) {
@@ -167,17 +167,17 @@ cvar.multiview <- function(x_list, y,
         })
       }))
     }
-
+    
     if (type.measure == "class") {
       yv <- as.numeric(y_test)
       return(apply(preds_fold, 2, function(p) {
         mean((as.numeric(p) >= 0.5) != yv)
       }))
     }
-
+    
     stop("Unsupported type.measure in cvar.multiview implementation.")
   }
-
+  
   choose_best_index <- function(vals, metric) {
     if (metric %in% c("auc")) {
       which.max(vals)
@@ -185,7 +185,7 @@ cvar.multiview <- function(x_list, y,
       which.min(vals)
     }
   }
-
+  
   choose_1se <- function(lambda, cvmean, cvse, idx_best, metric) {
     if (metric %in% c("auc")) {
       threshold <- cvmean[idx_best] - cvse[idx_best]
@@ -195,22 +195,22 @@ cvar.multiview <- function(x_list, y,
       max(lambda[cvmean <= threshold])
     }
   }
-
+  
   alignment <- match.arg(alignment)
   if (!is.null(seed)) {
     set.seed(seed)
   }
-
-  N <- nrow(x_list[[1L]])
-  if (any(vapply(x_list, function(m) nrow(m), integer(1)) != N)) {
-    stop("All views in x_list must have the same number of rows.")
+  
+  N <- nrow(x.list[[1L]])
+  if (any(vapply(x.list, function(m) nrow(m), integer(1)) != N)) {
+    stop("All views in x.list must have the same number of rows.")
   }
-
+  
   y <- drop(y)
   if (length(y) != N) {
-    stop("Length of y must equal nrow(x_list[[1]]).")
+    stop("Length of y must equal nrow(x.list[[1]]).")
   }
-
+  
   if (is.null(weights)) {
     weights <- rep(1, N)
   }
@@ -220,7 +220,7 @@ cvar.multiview <- function(x_list, y,
   if (!is.null(offset) && length(offset) != N) {
     stop("Length of offset must equal N when provided.")
   }
-
+  
   if (is.null(type.measure)) {
     if (family$family == "gaussian") {
       type.measure <- "mse"
@@ -230,7 +230,7 @@ cvar.multiview <- function(x_list, y,
       type.measure <- "deviance"
     }
   }
-
+  
   if (length(s) != 1) {
     s <- s[1]
   }
@@ -238,10 +238,10 @@ cvar.multiview <- function(x_list, y,
     s <- "lambda.1se"
   }
   s <- match.arg(s, choices = c("lambda.1se", "lambda.min"))
-
+  
   alpha <- sort(unique(alpha))
   rho <- sort(unique(rho))
-
+  
   if (is.null(foldid)) {
     if (family$family == "binomial") {
       y01 <- as.integer(as.numeric(y) > 0)
@@ -262,34 +262,34 @@ cvar.multiview <- function(x_list, y,
       stop("foldid must contain at least 2 unique folds.")
     }
   }
-
+  
   if (family$family == "binomial") {
     validate_binomial_folds(as.integer(as.numeric(y) > 0), foldid)
   }
-
+  
   fold_levels <- sort(unique(foldid))
   K <- length(fold_levels)
-
+  
   grid <- expand.grid(alpha = alpha, rho = rho)
   combo_results <- vector("list", nrow(grid))
-
+  
   score_choice <- rep(NA_real_, nrow(grid))
   lambda_choice_vec <- rep(NA_real_, nrow(grid))
   lambda_min_vec <- rep(NA_real_, nrow(grid))
   lambda_1se_vec <- rep(NA_real_, nrow(grid))
-
+  
   for (g in seq_len(nrow(grid))) {
     a <- grid$alpha[g]
     r <- grid$rho[g]
-
+    
     if (trace.it || verbose) {
       cat(sprintf("Tuning alpha = %.3f, rho = %.3f (%d/%d)\n", a, r, g, nrow(grid)))
     }
-
+    
     combo_attempt <- tryCatch({
       if (is.null(lambda)) {
         tmp_fit <- mv_fit(
-          x_list = x_list,
+          x.list = x.list,
           y = y,
           family = family,
           alpha = a,
@@ -304,19 +304,19 @@ cvar.multiview <- function(x_list, y,
       } else {
         lambda_g <- lambda
       }
-
+      
       outlist <- vector("list", K)
       for (i in seq_along(fold_levels)) {
         f <- fold_levels[i]
         is_test <- foldid == f
-
-        x_train <- lapply(x_list, function(m) m[!is_test, , drop = FALSE])
+        
+        x_train <- lapply(x.list, function(m) m[!is_test, , drop = FALSE])
         y_train <- if (is.matrix(y)) y[!is_test, , drop = FALSE] else y[!is_test]
         w_train <- weights[!is_test]
         off_train <- if (is.null(offset)) NULL else offset[!is_test]
-
+        
         outlist[[f]] <- mv_fit(
-          x_list = x_train,
+          x.list = x_train,
           y = y_train,
           family = family,
           alpha = a,
@@ -329,18 +329,18 @@ cvar.multiview <- function(x_list, y,
           ...
         )
       }
-
+      
       predmat <- build_predmat_mv(
         outlist = outlist,
         lambda = lambda_g,
-        x_list = x_list,
+        x.list = x.list,
         offset = offset,
         foldid = foldid,
         alignment = alignment,
         family = family,
         type = "response"
       )
-
+      
       cvm <- matrix(NA_real_, nrow = length(lambda_g), ncol = K)
       for (i in seq_along(fold_levels)) {
         f <- fold_levels[i]
@@ -349,16 +349,16 @@ cvar.multiview <- function(x_list, y,
         preds_fold <- predmat[test_idx, , drop = FALSE]
         cvm[, i] <- score_fold_metric(y_test, preds_fold, family$family, type.measure)
       }
-
+      
       cvmean <- rowMeans(cvm, na.rm = TRUE)
       cvse <- apply(cvm, 1, sd, na.rm = TRUE) / sqrt(K)
-
+      
       idx_best <- choose_best_index(cvmean, type.measure)
       lambda_min <- lambda_g[idx_best]
       lambda_1se <- choose_1se(lambda_g, cvmean, cvse, idx_best, type.measure)
       lambda_choice <- if (s == "lambda.min") lambda_min else lambda_1se
       choice_idx <- which.min(abs(lambda_g - lambda_choice))
-
+      
       list(
         score = cvmean[choice_idx],
         lambda.choice = lambda_choice,
@@ -382,7 +382,7 @@ cvar.multiview <- function(x_list, y,
         )
       )
     }, error = function(e) e)
-
+    
     if (inherits(combo_attempt, "error")) {
       if (trace.it || verbose) {
         message(sprintf(
@@ -392,26 +392,26 @@ cvar.multiview <- function(x_list, y,
       }
       next
     }
-
+    
     score_choice[g] <- combo_attempt$score
     lambda_choice_vec[g] <- combo_attempt$lambda.choice
     lambda_min_vec[g] <- combo_attempt$lambda.min
     lambda_1se_vec[g] <- combo_attempt$lambda.1se
     combo_results[[g]] <- combo_attempt$combo.result
   }
-
+  
   valid_idx <- which(!is.na(score_choice) & !vapply(combo_results, is.null, logical(1)))
   if (length(valid_idx) == 0L) {
     stop("All alpha/rho combinations failed in cvar.multiview().")
   }
-
+  
   best_idx <- valid_idx[choose_best_index(score_choice[valid_idx], type.measure)]
   alpha_choice <- grid$alpha[best_idx]
   rho_choice <- grid$rho[best_idx]
   lambda_choice <- lambda_choice_vec[best_idx]
-
+  
   final_fit <- mv_fit(
-    x_list = x_list,
+    x.list = x.list,
     y = y,
     family = family,
     alpha = alpha_choice,
@@ -423,11 +423,11 @@ cvar.multiview <- function(x_list, y,
     trace.it = 0,
     ...
   )
-
+  
   selected <- combo_results[[best_idx]]
   idx_min <- which.min(abs(selected$lambda - selected$lambda.min))
   idx_1se <- which.min(abs(selected$lambda - selected$lambda.1se))
-
+  
   idx_alpha_choice <- valid_idx[grid$alpha[valid_idx] == alpha_choice]
   idx_alpha_choice <- idx_alpha_choice[order(grid$rho[idx_alpha_choice])]
   cv_by_rho <- lapply(idx_alpha_choice, function(i) {
@@ -449,7 +449,7 @@ cvar.multiview <- function(x_list, y,
       foldid = ri$foldid
     )
   })
-
+  
   rho_seq <- vapply(cv_by_rho, function(z) z$rho, numeric(1))
   rho_lambda_min <- vapply(cv_by_rho, function(z) z$lambda.min, numeric(1))
   rho_lambda_1se <- vapply(cv_by_rho, function(z) z$lambda.1se, numeric(1))
@@ -462,7 +462,7 @@ cvar.multiview <- function(x_list, y,
     j <- which.min(abs(z$lambda - z$lambda.choice))
     z$cvse[j]
   }, numeric(1))
-
+  
   out <- list(
     call = match.call(),
     multiview.fit = final_fit,
@@ -502,7 +502,7 @@ cvar.multiview <- function(x_list, y,
     nfolds = K,
     family = family
   )
-
+  
   class(out) <- c("cvar.multiview", "cv.multiview", "cv.glmnet")
   out
 }
