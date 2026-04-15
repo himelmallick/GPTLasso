@@ -1,16 +1,14 @@
 # GPTLasso
 
-This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**.
+This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**. It extends the `ptLasso` framework to support global multimodal learning across multiple studies through cooperative-learning-based pretraining and transfer learning.
 
-It extends the `ptLasso` framework to support global multiview learning across multiple studies through cooperative-learning-based pretraining and transfer learning, with the current workflow centered on `gptLasso()` and `cv.gptLasso()`.
-
-![](figures/workflow.png)
+![](figures/workflow.png){width="700"}
 
 ## Background
 
-Modern biomedical prediction problems often involve multiple data modalities collected across several related cohorts, while each individual study may still be too small for stable model fitting. This project addresses that setting by combining multiview modeling with transfer learning so that information can be shared across both studies and modalities while still allowing study-specific refinement.
+Modern biomedical prediction problems often involve multiple data modalities collected across several related cohorts, while each individual study may still be too small for stable model fitting. This project addresses that setting by combining multimodal modeling with transfer learning so that information can be shared across both studies and modalities while still allowing study-specific refinement.
 
-The framework uses a pretrained multiview model to learn shared structure, then fine-tunes study-level fits for improved local prediction. In simulations and motivating multi-omics applications, the goal is to improve predictive accuracy, estimation quality, and cross-study generalization relative to single-study or single-view approaches.
+The framework uses a pretrained multimodal model to learn shared structure, then fine-tunes study-level fits for improved local prediction. In simulations and motivating multi-omics applications, the goal is to improve predictive accuracy, estimation quality, and cross-study generalization relative to single-study or single-modal approaches.
 
 **Keywords:** Transfer learning, Cooperative learning, Multistudy analysis, Multimodal Integration, LASSO, Pretraining
 
@@ -30,7 +28,7 @@ library(GPTLasso)
 
 GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
 
-![](figures/Input.png)
+![](figures/input.png){width="700"}
 
 **Note on `study` Labels:**
 
@@ -107,14 +105,20 @@ cv_fit <- cv.gptLasso(
   family = "gaussian",                          # Response family
   type.measure = "mse",                         # Cross-validation metric used inside the multiview fits
   rho = seq(0, 1, length = 11),                 # Multiview cooperative learning fusion stage parameter
-  alpha_ptlasso_list = seq(0, 1, length = 11),  # Numeric vector of transfer-learning values to compare
+  alpha.ptlasso.list = seq(0, 1, length = 11),  # Numeric vector of transfer-learning values to compare
   overall.lambda = "lambda.min",                # Lambda rule for the overall model when summarizing CV performance
-  ind.lambda = "lambda.1se"",                   # Lambda rule for individual models when summarizing CV performance
-  pre.lambda = "lambda.1se"",                   # Lambda rule for pretrained models when summarizing CV performance
+  ind.lambda = "lambda.1se",                    # Lambda rule for individual models when summarizing CV performance
+  pre.lambda = "lambda.1se",                    # Lambda rule for pretrained models when summarizing CV performance
   nfolds = 10,                                  # Cross-validation fold
   verbose = TRUE                                # Track model fitting
 )
 ```
+
+**Note on fold construction for fitting models:**
+
+When `foldid` is not specified, the algorithm automatically constructs V folds (i.e., `nfolds = V`) by partitioning samples within each study. The same within-study fold assignments are used consistently across both the individual models and the pretrained models. To fit the cooperative learning–based overall model, samples from the same fold across studies are stacked by view to form the V-fold training datasets.
+
+![](figures/vfolds.png){width="700"}
 
 Inspect the selected alpha and the performance grid:
 
@@ -129,10 +133,10 @@ Example output:
 
 ``` text
 Gaussian cv.gptLasso() alpha grid summary:
-$alpha_ptlasso_hat
+$alpha.ptlasso.hat
 [1] 0.7
 
-$varying.alpha_ptlasso_hat
+$varying.alpha.ptlasso.hat
 Study_1 Study_2 Study_3 
     0.9     0.7     0.5 
 
@@ -182,7 +186,7 @@ pred$metrics$r2
 Example output:
 
 ``` text
- [1] "call"                "alpha_ptlasso"       "yhatoverall"        
+ [1] "call"                "alpha.ptlasso"       "yhatoverall"        
  [4] "yhatind"             "yhatpre"             "supoverall"         
  [7] "supind"              "suppre.common"       "suppre.individual"  
 [10] "type.measure"        "metrics"             "erroverall"         
