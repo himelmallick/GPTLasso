@@ -2,7 +2,7 @@
 
 This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**. It extends the `ptLasso` framework to support global multimodal learning across multiple studies through cooperative-learning-based pretraining and transfer learning.
 
-![](figures/workflow.png){width="700"}
+![](figures/workflow.png)
 
 ## Background
 
@@ -28,7 +28,7 @@ library(GPTLasso)
 
 GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
 
-![](figures/input.png){width="700"}
+![](figures/x.png)
 
 **Note on `study` Labels:**
 
@@ -118,7 +118,7 @@ cv_fit <- cv.gptLasso(
 
 When `foldid` is not specified, the algorithm automatically constructs V folds (i.e., `nfolds = V`) by partitioning samples within each study. The same within-study fold assignments are used consistently across both the individual models and the pretrained models. To fit the cooperative learning–based overall model, samples from the same fold across studies are stacked by view to form the V-fold training datasets.
 
-![](figures/vfolds.png){width="700"}
+![](figures/vfolds.png)
 
 Inspect the selected alpha and the performance grid:
 
