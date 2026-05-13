@@ -13,6 +13,10 @@
 #' @param overall.lambda Lambda rule used for the overall model when summarizing CV performance.
 #' @param ind.lambda Lambda rule used for the individual models when summarizing CV performance.
 #' @param pre.lambda Lambda rule used for the pretrained models when summarizing CV performance.
+#' @param target Optional target study/studies. Default `NULL` reproduces current
+#'   behavior and evaluates all studies. When provided, must be a character
+#'   vector of study names; candidate pretrained performance and alpha selection
+#'   are summarized over these target studies.
 #' @param verbose Should progress messages be printed?
 #' @param fitoverall Optional pre-fit overall multiview model reused across alphas.
 #' @param fitind Optional pre-fit list of study-specific multiview models reused across alphas.
@@ -23,10 +27,12 @@
 #'
 #' @return A `cv.gptLasso` object, stored as a list. Important components include:
 #' \itemize{
-#'   \item `alpha.ptlasso.hat`: the selected fixed transfer-learning value.
-#'   \item `varying.alpha.ptlasso.hat`: study-specific transfer-learning values chosen from the same grid.
+#'   \item `alpha.ptlasso.hat`: the selected fixed transfer-learning value; when `target != NULL`, this value is selected by optimizing the target-study `mean` column of `errpre`.
+#'   \item `varying.alpha.ptlasso.hat`: target-specific transfer-learning values chosen from the same grid.
 #'   \item `alpha.ptlasso.list`: the candidate transfer-learning grid that was evaluated.
-#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, with pooled and study-specific columns.
+#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, with `pooled`, `mean`, and study-specific columns.
+#'   \item `target`: the user-supplied target specification.
+#'   \item `target.study.names`: normalized target studies used in CV summaries.
 #'   \item `errind`: performance summary for the individual study fits on the training layout.
 #'   \item `erroverall`: performance summary for the pooled stage-one fit on the training layout.
 #'   \item `fitoverall`: the shared overall fit reused across the alpha grid.
@@ -52,6 +58,15 @@
 #' cv_fit_gaussian$alpha.ptlasso.hat
 #' cv_fit_gaussian$varying.alpha.ptlasso.hat
 #' cv_fit_gaussian$errpre
+#'
+#' cv_fit_target <- cv.gptLasso(
+#'   x = x_train,
+#'   family = "gaussian",
+#'   type.measure = "mse",
+#'   target = c("Study_1", "Study_3"),
+#'   alpha.ptlasso.list = c(0, 0.5, 1),
+#'   nfolds = 3
+#' )
 #'
 #' # Binomial cross-validation example
 #' set.seed(5678)
@@ -80,6 +95,7 @@ cv.gptLasso <- function(
     overall.lambda = c("lambda.min", "lambda.1se"),
     ind.lambda = c("lambda.min", "lambda.1se"),
     pre.lambda = c("lambda.min", "lambda.1se"),
+    target = NULL,
     verbose = FALSE,
     fitoverall = NULL,
     fitind = NULL,
@@ -147,6 +163,7 @@ cv.gptLasso <- function(
       overall.lambda = overall.lambda,
       ind.lambda = ind.lambda,
       pre.lambda = pre.lambda,
+      target = target,
       nfolds = nfolds,
       foldid = foldid,
       verbose = verbose,
@@ -161,15 +178,16 @@ cv.gptLasso <- function(
     if (is.null(fitoverall)) fitoverall <- fit[[ii]]$fitoverall
     if (is.null(fitind)) fitind <- fit[[ii]]$fitind
     
+    target.study.names <- fit[[ii]]$target.study.names
     pred.pre <- lapply(seq_along(fit[[ii]]$fitpre), function(kk) {
       model <- fit[[ii]]$fitpre[[kk]]
       lambda <- ptmv_resolve_s(model, pre.lambda)
       lam.idx <- which.min(abs(model$lambda - lambda))
       as.numeric(model$fit.preval[, lam.idx])
     })
-    names(pred.pre) <- fit[[ii]]$study.names
+    names(pred.pre) <- target.study.names
     
-    study.err <- vapply(fit[[ii]]$study.names, function(study.name) {
+    study.err <- vapply(target.study.names, function(study.name) {
       ptmv_metric_value(
         fit[[ii]]$training.layout$y[[study.name]],
         pred.pre[[study.name]],
@@ -179,13 +197,14 @@ cv.gptLasso <- function(
     }, numeric(1))
     
     err.rows[[ii]] <- c(
-      overall = ptmv_metric_value(
-        unlist(fit[[ii]]$training.layout$y, use.names = FALSE),
+      pooled = ptmv_metric_value(
+        unlist(fit[[ii]]$training.layout$y[target.study.names], use.names = FALSE),
         unlist(pred.pre, use.names = FALSE),
         family = family,
         type.measure = type.measure
       ),
-      stats::setNames(study.err, fit[[ii]]$study.names)
+      mean = mean(study.err, na.rm = TRUE),
+      stats::setNames(study.err, target.study.names)
     )
   }
   
@@ -193,8 +212,9 @@ cv.gptLasso <- function(
   rownames(errpre) <- NULL
   
   base.fit <- fit[[1]]
-  overall.pred <- lapply(seq_along(base.fit$study.names), function(kk) {
-    study.name <- base.fit$study.names[kk]
+  target.study.names <- base.fit$target.study.names
+  overall.pred <- lapply(seq_along(target.study.names), function(kk) {
+    study.name <- target.study.names[kk]
     lambda <- ptmv_resolve_s(base.fit$fitoverall, overall.lambda)
     preds <- predict(
       base.fit$fitoverall,
@@ -202,16 +222,16 @@ cv.gptLasso <- function(
       s = lambda,
       type = "response",
       newoffset = if (base.fit$group.intercepts) {
-        rep(base.fit$group.baseline[study.name], base.fit$n.by.study[kk])
+        rep(base.fit$group.baseline[study.name], base.fit$n.by.study[study.name])
       } else {
         NULL
       }
     )
     as.numeric(preds)
   })
-  names(overall.pred) <- base.fit$study.names
+  names(overall.pred) <- target.study.names
   
-  ind.pred <- lapply(base.fit$study.names, function(study.name) {
+  ind.pred <- lapply(target.study.names, function(study.name) {
     as.numeric(
       predict(
         base.fit$fitind[[study.name]],
@@ -221,27 +241,27 @@ cv.gptLasso <- function(
       )
     )
   })
-  names(ind.pred) <- base.fit$study.names
+  names(ind.pred) <- target.study.names
   
   erroverall <- ptmv_summarize_metric(
     overall.pred,
-    base.fit$training.layout$y,
+    base.fit$training.layout$y[target.study.names],
     family,
     type.measure,
     add_r2 = family == "gaussian"
   )
   errind <- ptmv_summarize_metric(
     ind.pred,
-    base.fit$training.layout$y,
+    base.fit$training.layout$y[target.study.names],
     family,
     type.measure,
     add_r2 = family == "gaussian"
   )
   
-  overall.idx <- metric.rule$best(errpre[, "overall"])
+  overall.idx <- metric.rule$best(errpre[, "mean"])
   alpha.ptlasso.hat <- alpha.ptlasso.list[overall.idx]
   selected.fit <- fit[[overall.idx]]
-  varying.alpha.ptlasso.hat <- vapply(base.fit$study.names, function(study.name) {
+  varying.alpha.ptlasso.hat <- vapply(target.study.names, function(study.name) {
     alpha.ptlasso.list[metric.rule$best(errpre[, study.name])]
   }, numeric(1))
   
@@ -249,6 +269,8 @@ cv.gptLasso <- function(
     call = this.call,
     alpha.ptlasso.hat = alpha.ptlasso.hat,
     varying.alpha.ptlasso.hat = varying.alpha.ptlasso.hat,
+    target = target,
+    target.study.names = target.study.names,
     alpha.ptlasso.list = alpha.ptlasso.list,
     rho = rho,
     errpre = errpre,

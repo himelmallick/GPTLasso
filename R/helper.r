@@ -730,6 +730,34 @@ ptmv_validate_matrix <- function(x, context) {
   x
 }
 
+# Helper: resolve user-supplied target studies against training study names.
+# Used in `gptLasso()`, `cv.gptLasso()`, and prediction wrappers.
+ptmv_resolve_target_studies <- function(target, study_names, context = "target") {
+  if (is.null(target)) {
+    return(study_names)
+  }
+  if (!is.character(target)) {
+    stop(sprintf("%s must be NULL or a character vector of study names.", context))
+  }
+  target <- unique(as.character(target))
+  if (length(target) == 0L || anyNA(target) || any(target == "")) {
+    stop(sprintf("%s must contain at least one non-empty study name.", context))
+  }
+  unknown <- setdiff(target, study_names)
+  if (length(unknown) > 0L) {
+    stop(sprintf(
+      "%s includes unknown study name(s): %s.",
+      context,
+      paste(unknown, collapse = ", ")
+    ))
+  }
+  out <- study_names[study_names %in% target]
+  if (length(out) == 0L) {
+    stop(sprintf("%s resolves to no valid study names.", context))
+  }
+  out
+}
+
 # Helper: normalize and validate Bioconductor-style multistudy input.
 # Used in `gptLasso()`.
 ptmv_normalize_container <- function(x, require_y = TRUE, context = "x") {
@@ -930,6 +958,20 @@ ptmv_normalize_newdata <- function(xtest, template) {
   new_input
 }
 
+# Helper: validate test-study subset against effective target studies.
+# Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
+ptmv_validate_target_newdata <- function(test_study_names, target_study_names, context = "predict") {
+  if (!all(test_study_names %in% target_study_names)) {
+    bad <- setdiff(test_study_names, target_study_names)
+    stop(sprintf(
+      "%s: xtest includes non-target study name(s): %s.",
+      context,
+      paste(bad, collapse = ", ")
+    ))
+  }
+  invisible(TRUE)
+}
+
 # Helper: normalize and validate study-list test outcomes.
 # Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
 ptmv_prepare_ytest <- function(ytest, study_names, study_sizes = NULL) {
@@ -1084,7 +1126,8 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
   all_y <- unlist(y, use.names = FALSE)
   all_pred <- unlist(preds, use.names = FALSE)
   out <- c(
-    overall = ptmv_metric_value(all_y, all_pred, family, type.measure),
+    pooled = ptmv_metric_value(all_y, all_pred, family, type.measure),
+    mean = mean(study_err, na.rm = TRUE),
     setNames(study_err, study_names)
   )
   
@@ -1094,7 +1137,8 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
     }, numeric(1))
     out <- c(
       out,
-      "r^2" = ptmv_r2_value(all_y, all_pred),
+      "r^2.pooled" = ptmv_r2_value(all_y, all_pred),
+      "r^2.mean" = mean(study_r2, na.rm = TRUE),
       setNames(study_r2, paste0("r^2.", study_names))
     )
   }
@@ -1108,7 +1152,13 @@ ptmv_metric_entries <- function(preds, y, family, type.measure, metric_fun = ptm
   study_metric <- vapply(study_names, function(study_name) {
     metric_fun(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
-  c(mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
+  pooled_metric <- metric_fun(
+    unlist(y, use.names = FALSE),
+    unlist(preds, use.names = FALSE),
+    family,
+    type.measure
+  )
+  c(pooled = pooled_metric, mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
 }
 
 # Helper: build the user-facing prediction metrics report.
@@ -1123,7 +1173,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
     ind = ptmv_metric_entries(ind_preds, y, family, type.measure),
     pre = ptmv_metric_entries(pre_preds, y, family, type.measure)
   )
-  colnames(metrics[[metric_name]]) <- c("mean", study_names)
+  colnames(metrics[[metric_name]]) <- c("pooled", "mean", study_names)
   
   if (family == "gaussian") {
     metrics[["r2"]] <- rbind(
@@ -1137,7 +1187,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
         ptmv_r2_value(y, pred)
       })
     )
-    colnames(metrics[["r2"]]) <- c("mean", study_names)
+    colnames(metrics[["r2"]]) <- c("pooled", "mean", study_names)
   }
   
   metrics
@@ -1151,6 +1201,7 @@ ptmv_build_prediction_object <- function(call, alpha.ptlasso, type.measure,
                                          linkoverall = NULL, linkind = NULL, linkpre = NULL,
                                          metrics = NULL,
                                          erroverall = NULL, errind = NULL, errpre = NULL,
+                                         target = NULL, target.study.names = NULL,
                                          fit = NULL, metric_predictions = NULL,
                                          class_name = "predict.gptLasso") {
   out <- list(
@@ -1172,6 +1223,8 @@ ptmv_build_prediction_object <- function(call, alpha.ptlasso, type.measure,
   if (!is.null(erroverall)) out$erroverall <- erroverall
   if (!is.null(errind)) out$errind <- errind
   if (!is.null(errpre)) out$errpre <- errpre
+  if (!is.null(target)) out$target <- target
+  if (!is.null(target.study.names)) out$target.study.names <- target.study.names
   if (!is.null(fit)) out$fit <- fit
   if (!is.null(metric_predictions)) out$.metric_predictions <- metric_predictions
   if (identical(class_name, "predict.cv.gptLasso")) {

@@ -8,6 +8,7 @@
   object,
   xtest,
   ytest = NULL,
+  target = NULL,
   type = c("link", "response", "class"),
   overall.lambda = c("lambda.min", "lambda.1se"),
   ind.lambda = c("lambda.min", "lambda.1se"),
@@ -22,6 +23,11 @@
 \item{xtest}{A named list with \code{feature_table}, \code{sample_metadata}, and \code{feature_metadata}.}
 
 \item{ytest}{Optional list of response vectors used to compute performance summaries.}
+
+\item{target}{Optional target study/studies for prediction. Default \code{NULL}
+uses the target configuration stored in \code{object} (or all studies for legacy
+fits). When supplied, must be a character vector of training study names.
+\code{xtest} studies must be a subset of the resolved target studies.}
 
 \item{type}{Prediction scale: \code{"link"}, \code{"response"}, or \code{"class"} for binomial fits.}
 
@@ -46,8 +52,10 @@ A \code{predict.gptLasso} object, stored as a list. Important components include
 \item \code{suppre.common}: stage-one support reused by the pretrained fits.
 \item \code{suppre.individual}: additional feature indices selected by the pretrained fits beyond \code{suppre.common}.
 \item \code{linkoverall}, \code{linkind}, \code{linkpre}: optional link-scale predictions when \code{return.link = TRUE}.
-\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 1)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{mean} plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
+\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 2)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{pooled}, \code{mean}, plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
 \item \code{erroverall}, \code{errind}, \code{errpre}: backward-compatible performance summaries when \code{ytest} is supplied.
+\item \code{target}: the effective target specification used for prediction.
+\item \code{target.study.names}: normalized target studies used for target-constrained prediction.
 }
 }
 \description{
@@ -74,6 +82,7 @@ pred_gaussian <- predict(
   fit_gaussian,
   xtest = x_test,
   ytest = ytest,
+  target = NULL,
   type = "response"
 )
 

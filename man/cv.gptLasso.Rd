@@ -15,6 +15,7 @@ cv.gptLasso(
   overall.lambda = c("lambda.min", "lambda.1se"),
   ind.lambda = c("lambda.min", "lambda.1se"),
   pre.lambda = c("lambda.min", "lambda.1se"),
+  target = NULL,
   verbose = FALSE,
   fitoverall = NULL,
   fitind = NULL,
@@ -45,6 +46,11 @@ cv.gptLasso(
 
 \item{pre.lambda}{Lambda rule used for the pretrained models when summarizing CV performance.}
 
+\item{target}{Optional target study/studies. Default \code{NULL} reproduces current
+behavior and evaluates all studies. When provided, must be a character
+vector of study names; candidate pretrained performance and alpha selection
+are summarized over these target studies.}
+
 \item{verbose}{Should progress messages be printed?}
 
 \item{fitoverall}{Optional pre-fit overall multiview model reused across alphas.}
@@ -62,10 +68,12 @@ cv.gptLasso(
 \value{
 A \code{cv.gptLasso} object, stored as a list. Important components include:
 \itemize{
-\item \code{alpha.ptlasso.hat}: the selected fixed transfer-learning value.
-\item \code{varying.alpha.ptlasso.hat}: study-specific transfer-learning values chosen from the same grid.
+\item \code{alpha.ptlasso.hat}: the selected fixed transfer-learning value; when \code{target != NULL}, this value is selected by optimizing the target-study \code{mean} column of \code{errpre}.
+\item \code{varying.alpha.ptlasso.hat}: target-specific transfer-learning values chosen from the same grid.
 \item \code{alpha.ptlasso.list}: the candidate transfer-learning grid that was evaluated.
-\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, with pooled and study-specific columns.
+\item \code{errpre}: a matrix summarizing pretrained performance for each candidate alpha, with \code{pooled}, \code{mean}, and study-specific columns.
+\item \code{target}: the user-supplied target specification.
+\item \code{target.study.names}: normalized target studies used in CV summaries.
 \item \code{errind}: performance summary for the individual study fits on the training layout.
 \item \code{erroverall}: performance summary for the pooled stage-one fit on the training layout.
 \item \code{fitoverall}: the shared overall fit reused across the alpha grid.
@@ -95,6 +103,15 @@ cv_fit_gaussian <- cv.gptLasso(
 cv_fit_gaussian$alpha.ptlasso.hat
 cv_fit_gaussian$varying.alpha.ptlasso.hat
 cv_fit_gaussian$errpre
+
+cv_fit_target <- cv.gptLasso(
+  x = x_train,
+  family = "gaussian",
+  type.measure = "mse",
+  target = c("Study_1", "Study_3"),
+  alpha.ptlasso.list = c(0, 0.5, 1),
+  nfolds = 3
+)
 
 # Binomial cross-validation example
 set.seed(5678)

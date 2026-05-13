@@ -6,6 +6,10 @@
 #' @param object A fitted `gptLasso` object.
 #' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
 #' @param ytest Optional list of response vectors used to compute performance summaries.
+#' @param target Optional target study/studies for prediction. Default `NULL`
+#'   uses the target configuration stored in `object` (or all studies for legacy
+#'   fits). When supplied, must be a character vector of training study names.
+#'   `xtest` studies must be a subset of the resolved target studies.
 #' @param type Prediction scale: `"link"`, `"response"`, or `"class"` for binomial fits.
 #' @param overall.lambda Lambda rule used for overall-model prediction.
 #' @param ind.lambda Lambda rule used for individual-model prediction.
@@ -23,8 +27,10 @@
 #'   \item `suppre.common`: stage-one support reused by the pretrained fits.
 #'   \item `suppre.individual`: additional feature indices selected by the pretrained fits beyond `suppre.common`.
 #'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions when `return.link = TRUE`.
-#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, or `metrics$deviance` as a `3 x (k + 1)` table with rows `overall`, `ind`, and `pre`, and columns `mean` plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
+#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, or `metrics$deviance` as a `3 x (k + 2)` table with rows `overall`, `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
 #'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance summaries when `ytest` is supplied.
+#'   \item `target`: the effective target specification used for prediction.
+#'   \item `target.study.names`: normalized target studies used for target-constrained prediction.
 #' }
 #'
 #' @examples
@@ -47,6 +53,7 @@
 #'   fit_gaussian,
 #'   xtest = x_test,
 #'   ytest = ytest,
+#'   target = NULL,
 #'   type = "response"
 #' )
 #'
@@ -78,7 +85,7 @@
 #'
 #' pred_binomial$errpre
 #' @export
-predict.gptLasso <- function(object, xtest, ytest = NULL,
+predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
                              type = c("link", "response", "class"),
                              overall.lambda = c("lambda.min", "lambda.1se"),
                              ind.lambda = c("lambda.min", "lambda.1se"),
@@ -112,10 +119,39 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
   if (object$family != "binomial" && type == "class") {
     stop("type = 'class' is only supported for binomial models.")
   }
+  train.study.names <- object$study.names
+  object.target.study.names <- if (is.null(object$target.study.names)) {
+    train.study.names
+  } else {
+    object$target.study.names
+  }
+  effective.target.study.names <- if (is.null(target)) {
+    object.target.study.names
+  } else {
+    ptmv_resolve_target_studies(
+      target = target,
+      study_names = train.study.names,
+      context = "predict.gptLasso(target)"
+    )
+  }
+  target.out <- if (is.null(target)) object$target else target
+  available.target.studies <- intersect(names(object$fitind), names(object$fitpre))
+  if (!all(effective.target.study.names %in% available.target.studies)) {
+    missing_models <- setdiff(effective.target.study.names, available.target.studies)
+    stop(sprintf(
+      "predict.gptLasso(): no study-specific models available for target study name(s): %s.",
+      paste(missing_models, collapse = ", ")
+    ))
+  }
   
   xtest.norm <- ptmv_normalize_newdata(xtest, object$training.layout)
   xtest.split <- xtest.norm$x
   test.study.names <- xtest.norm$study_names
+  ptmv_validate_target_newdata(
+    test_study_names = test.study.names,
+    target_study_names = effective.target.study.names,
+    context = "predict.gptLasso()"
+  )
   test.sizes <- xtest.norm$n_by_study
   ytest <- ptmv_prepare_ytest(ytest, test.study.names, study_sizes = test.sizes)
   
@@ -232,6 +268,8 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
     erroverall = erroverall,
     errind = errind,
     errpre = errpre,
+    target = target.out,
+    target.study.names = effective.target.study.names,
     metric_predictions = if (!is.null(ytest)) {
       list(overall = overall.resp, ind = yhatind.resp, pre = yhatpre.resp)
     } else {
@@ -250,6 +288,10 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #' @param object A fitted `cv.gptLasso` object.
 #' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
 #' @param ytest Optional list of response vectors used to compute performance summaries.
+#' @param target Optional target study/studies for prediction. Default `NULL`
+#'   uses the target configuration stored in `object` (or all studies for legacy
+#'   fits). When supplied, `xtest` studies must be a subset of the resolved
+#'   target studies.
 #' @param alpha.ptlasso Optional user-specified transfer-learning choice. May be one value or one per study.
 #' @param alpha.ptlasso.type Either `"fixed"` or `"varying"` when `alpha.ptlasso` is not supplied.
 #' @param type Prediction scale: `"link"`, `"response"`, or `"class"` for binomial fits.
@@ -263,11 +305,13 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #'   `predict.gptLasso()`, plus:
 #' \itemize{
 #'   \item `alpha.ptlasso`: the chosen transfer-learning value, either fixed or study-specific.
+#'   \item `target`: the effective target specification used for prediction.
+#'   \item `target.study.names`: normalized target studies used for target-constrained prediction.
 #'   \item `fit`: the originating `cv.gptLasso` object.
 #' }
 #' When `ytest` is supplied, the returned object also includes `metrics`,
 #' `erroverall`, `errind`, and `errpre`. Each metric table has rows `overall`,
-#' `ind`, and `pre`, and columns `mean` plus one column per study.
+#' `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study.
 #'
 #' @examples
 #' # Gaussian cross-validated prediction example
@@ -321,7 +365,7 @@ predict.gptLasso <- function(object, xtest, ytest = NULL,
 #'
 #' pred_cv_binomial$fit$alpha.ptlasso.hat
 #' @export
-predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
+predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
                                 alpha.ptlasso = NULL,
                                 alpha.ptlasso.type = c("fixed", "varying"),
                                 type = c("link", "response", "class"),
@@ -354,13 +398,48 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
   overall.lambda <- match.arg(overall.lambda, c("lambda.min", "lambda.1se"))
   ind.lambda <- match.arg(ind.lambda, c("lambda.min", "lambda.1se"))
   pre.lambda <- match.arg(pre.lambda, c("lambda.min", "lambda.1se"))
+  fit.template <- object$fit[[1]]
+  train.study.names <- fit.template$study.names
+  object.target.study.names <- if (is.null(object$target.study.names)) {
+    train.study.names
+  } else {
+    object$target.study.names
+  }
+  effective.target.study.names <- if (is.null(target)) {
+    object.target.study.names
+  } else {
+    ptmv_resolve_target_studies(
+      target = target,
+      study_names = train.study.names,
+      context = "predict.cv.gptLasso(target)"
+    )
+  }
+  target.out <- if (is.null(target)) object$target else target
+  xtest.norm <- ptmv_normalize_newdata(xtest, fit.template$training.layout)
+  predict.study.names <- xtest.norm$study_names
+  ptmv_validate_target_newdata(
+    test_study_names = predict.study.names,
+    target_study_names = effective.target.study.names,
+    context = "predict.cv.gptLasso()"
+  )
   
   close.enough <- 1e-6
   if (is.null(alpha.ptlasso)) {
     alpha.ptlasso <- if (alpha.ptlasso.type == "fixed") {
       object$alpha.ptlasso.hat
     } else {
-      object$varying.alpha.ptlasso.hat
+      varying.alpha <- object$varying.alpha.ptlasso.hat
+      if (is.null(names(varying.alpha)) || any(names(varying.alpha) == "")) {
+        stop("object$varying.alpha.ptlasso.hat must be a named vector.")
+      }
+      missing_target <- setdiff(effective.target.study.names, names(varying.alpha))
+      if (length(missing_target) > 0L) {
+        stop(sprintf(
+          "object$varying.alpha.ptlasso.hat is missing target study name(s): %s.",
+          paste(missing_target, collapse = ", ")
+        ))
+      }
+      varying.alpha[effective.target.study.names]
     }
   }
   
@@ -374,6 +453,7 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
       fit,
       xtest = xtest,
       ytest = ytest,
+      target = effective.target.study.names,
       type = type,
       overall.lambda = overall.lambda,
       ind.lambda = ind.lambda,
@@ -388,15 +468,15 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
   }
   
   if (is.null(names(alpha.ptlasso))) {
-    if (length(alpha.ptlasso) != length(object$fit[[1]]$study.names)) {
-      stop("Must have one alpha.ptlasso for each study.")
+    if (length(alpha.ptlasso) != length(effective.target.study.names)) {
+      stop("Must have one alpha.ptlasso for each target study.")
     }
-    names(alpha.ptlasso) <- object$fit[[1]]$study.names
+    names(alpha.ptlasso) <- effective.target.study.names
   }
-  if (!setequal(names(alpha.ptlasso), object$fit[[1]]$study.names)) {
-    stop("alpha.ptlasso vector names must match the training study names exactly.")
+  if (!setequal(names(alpha.ptlasso), effective.target.study.names)) {
+    stop("alpha.ptlasso vector names must match the effective target study names exactly.")
   }
-  alpha.ptlasso <- alpha.ptlasso[object$fit[[1]]$study.names]
+  alpha.ptlasso <- alpha.ptlasso[effective.target.study.names]
   
   if (!all(vapply(alpha.ptlasso, function(a) any(abs(object$alpha.ptlasso.list - a) < close.enough), logical(1)))) {
     stop("Includes at least one invalid alpha.ptlasso choice. Please choose from object$alpha.ptlasso.list.")
@@ -407,6 +487,7 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
       fit,
       xtest = xtest,
       ytest = ytest,
+      target = effective.target.study.names,
       type = type,
       overall.lambda = overall.lambda,
       ind.lambda = ind.lambda,
@@ -417,16 +498,16 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
   })
   names(pred.by.alpha) <- as.character(object$alpha.ptlasso.list)
   
-  yhatpre <- yhatind <- yhatoverall <- vector("list", length(alpha.ptlasso))
-  names(yhatpre) <- names(yhatind) <- names(yhatoverall) <- names(alpha.ptlasso)
+  yhatpre <- yhatind <- yhatoverall <- vector("list", length(predict.study.names))
+  names(yhatpre) <- names(yhatind) <- names(yhatoverall) <- predict.study.names
   if (return.link) {
-    linkpre <- linkind <- linkoverall <- vector("list", length(alpha.ptlasso))
-    names(linkpre) <- names(linkind) <- names(linkoverall) <- names(alpha.ptlasso)
+    linkpre <- linkind <- linkoverall <- vector("list", length(predict.study.names))
+    names(linkpre) <- names(linkind) <- names(linkoverall) <- predict.study.names
   } else {
     linkpre <- linkind <- linkoverall <- NULL
   }
   
-  for (study.name in names(alpha.ptlasso)) {
+  for (study.name in predict.study.names) {
     key <- as.character(alpha.ptlasso[[study.name]])
     pred <- pred.by.alpha[[key]]
     yhatpre[[study.name]] <- pred$yhatpre[[study.name]]
@@ -440,34 +521,37 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
   }
   
   supoverall <- pred.by.alpha[[as.character(object$alpha.ptlasso.hat)]]$supoverall
-  supind <- sort(unique(unlist(lapply(names(alpha.ptlasso), function(study.name) {
+  supind <- sort(unique(unlist(lapply(predict.study.names, function(study.name) {
     pred.by.alpha[[as.character(alpha.ptlasso[[study.name]])]]$supind
   }))))
   suppre.common <- pred.by.alpha[[as.character(object$alpha.ptlasso.hat)]]$suppre.common
-  suppre.individual <- sort(unique(unlist(lapply(names(alpha.ptlasso), function(study.name) {
+  suppre.individual <- sort(unique(unlist(lapply(predict.study.names, function(study.name) {
     pred.by.alpha[[as.character(alpha.ptlasso[[study.name]])]]$suppre.individual
   }))))
   
   metrics <- erroverall <- errind <- errpre <- NULL
   if (!is.null(ytest)) {
-    xtest.norm <- ptmv_normalize_newdata(xtest, object$fit[[1]]$training.layout)
-    ytest.norm <- ptmv_prepare_ytest(ytest, names(alpha.ptlasso), study_sizes = xtest.norm$n_by_study)
+    ytest.norm <- ptmv_prepare_ytest(
+      ytest,
+      predict.study.names,
+      study_sizes = xtest.norm$n_by_study[predict.study.names]
+    )
     family <- object$family
     type.measure <- object$type.measure
     metric.preds <- lapply(pred.by.alpha, function(pred) pred$.metric_predictions)
-    overall.metric.preds <- lapply(names(alpha.ptlasso), function(study.name) {
+    overall.metric.preds <- lapply(predict.study.names, function(study.name) {
       key <- as.character(alpha.ptlasso[[study.name]])
       metric.preds[[key]]$overall[[study.name]]
     })
-    ind.metric.preds <- lapply(names(alpha.ptlasso), function(study.name) {
+    ind.metric.preds <- lapply(predict.study.names, function(study.name) {
       key <- as.character(alpha.ptlasso[[study.name]])
       metric.preds[[key]]$ind[[study.name]]
     })
-    pre.metric.preds <- lapply(names(alpha.ptlasso), function(study.name) {
+    pre.metric.preds <- lapply(predict.study.names, function(study.name) {
       key <- as.character(alpha.ptlasso[[study.name]])
       metric.preds[[key]]$pre[[study.name]]
     })
-    names(overall.metric.preds) <- names(ind.metric.preds) <- names(pre.metric.preds) <- names(alpha.ptlasso)
+    names(overall.metric.preds) <- names(ind.metric.preds) <- names(pre.metric.preds) <- predict.study.names
     erroverall <- ptmv_summarize_metric(overall.metric.preds, ytest.norm, family, type.measure, add_r2 = family == "gaussian")
     errind <- ptmv_summarize_metric(ind.metric.preds, ytest.norm, family, type.measure, add_r2 = family == "gaussian")
     errpre <- ptmv_summarize_metric(pre.metric.preds, ytest.norm, family, type.measure, add_r2 = family == "gaussian")
@@ -499,6 +583,8 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL,
     erroverall = erroverall,
     errind = errind,
     errpre = errpre,
+    target = target.out,
+    target.study.names = effective.target.study.names,
     fit = object,
     metric_predictions = if (!is.null(ytest)) {
       list(overall = overall.metric.preds, ind = ind.metric.preds, pre = pre.metric.preds)

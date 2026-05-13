@@ -13,6 +13,7 @@ gptLasso(
   overall.lambda = c("lambda.1se", "lambda.min"),
   ind.lambda = c("lambda.1se", "lambda.min"),
   pre.lambda = c("lambda.1se", "lambda.min"),
+  target = NULL,
   foldid = NULL,
   nfolds = 10,
   verbose = FALSE,
@@ -47,6 +48,12 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 
 \item{pre.lambda}{Lambda rule used for the pretrained models.}
 
+\item{target}{Optional target study/studies. Default \code{NULL} reproduces current
+behavior and fits study-specific models for all studies. When provided,
+must be a character vector of study names; \code{fitind}/\code{fitpre} are restricted
+to these targets (in training-study order), while \code{fitoverall} is still fit
+on all studies.}
+
 \item{foldid}{Optional stacked fold assignment across all studies.}
 
 \item{nfolds}{Number of folds used when \code{foldid} is not supplied.}
@@ -79,6 +86,8 @@ A \code{gptLasso} object, stored as a list. Important components include:
 \item \code{fitoverall}: the pooled multiview stage-one fit.
 \item \code{fitind}: a named list of study-specific individual fits.
 \item \code{fitpre}: a named list of study-specific pretrained transfer fits.
+\item \code{target}: the user-supplied target specification.
+\item \code{target.study.names}: normalized target studies used for study-specific fitting.
 \item \code{support.vars}: feature indices selected by the overall stage-one fit.
 \item \code{group.baseline}: study-level baseline offsets used when \code{group.intercepts = TRUE}.
 \item \code{preval.offset}: study-wise stage-one linear predictors reused as offsets in pretraining.
@@ -101,6 +110,15 @@ fit_gaussian <- gptLasso(
   alpha.ptlasso = 0.5,
   family = "gaussian",
   type.measure = "mse",
+  nfolds = 3
+)
+
+fit_gaussian_target <- gptLasso(
+  x = x_train,
+  alpha.ptlasso = 0.5,
+  family = "gaussian",
+  type.measure = "mse",
+  target = "Study_2",
   nfolds = 3
 )
 

@@ -2,7 +2,7 @@
 
 This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**. It extends the `ptLasso` framework to support global multimodal learning across multiple studies through cooperative-learning-based pretraining and transfer learning.
 
-![](figures/workflow.png)
+![](figures/framework.png)
 
 ## Background
 
@@ -28,7 +28,7 @@ library(GPTLasso)
 
 GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
 
-![](figures/x.png)
+![](figures/data.png)
 
 **Note on `study` Labels:**
 
@@ -41,6 +41,7 @@ In this repository, `study` is the motivating example for handling different gro
 ``` r
 fit <- gptLasso(
     x,                                                      # Input
+    Target = NULL                                           # A character vector of study names specifying target study(s) or NULL (all studies)
     alpha.ptlasso = 0.5,                                    # Transfer-learning level in `[0, 1]`
     family = c("gaussian", "binomial"),                     # Response family
     type.measure = c("default", "mse", "auc", "deviance"),  # Cross-validation metric used inside the multiview fits
@@ -97,11 +98,12 @@ Study_1 Study_2 Study_3
     350     280     210 
 ```
 
-### 2. Fit a multistudy multiview transfer-learning model with `cv.gptLasso()`
+### 2. Fit a multistudy multiview transfer-learning model with `cv.gptLasso()` targetting at all studies
 
 ``` r
 cv_fit <- cv.gptLasso(
   x = x_train,                                  # Training input
+  target = NULL,                                # Default NULL that fitting study-specific models for all studies
   family = "gaussian",                          # Response family
   type.measure = "mse",                         # Cross-validation metric used inside the multiview fits
   rho = seq(0, 1, length = 11),                 # Multiview cooperative learning fusion stage parameter
@@ -134,38 +136,39 @@ Example output:
 ``` text
 Gaussian cv.gptLasso() alpha grid summary:
 $alpha.ptlasso.hat
-[1] 0.7
+[1] 0.6
 
 $varying.alpha.ptlasso.hat
 Study_1 Study_2 Study_3 
-    0.9     0.7     0.5 
+    1.0     0.7     0.6  
 
 $fitpre.rho     
 Study_1 Study_2 Study_3 
       0       0       0 
 
 $errpre
-      alpha.ptlasso  overall   Study_1  Study_2  Study_3
- [1,]           0.0 14.03710 13.412574 14.49092 14.47287
- [2,]           0.1 13.63681 13.167783 15.11919 12.44201
- [3,]           0.2 12.82442 12.230995 14.00321 12.24173
- [4,]           0.3 12.37466 11.604362 14.14203 11.30200
- [5,]           0.4 11.79183 11.192177 12.86076 11.36603
- [6,]           0.5 11.24072 10.529173 12.37608 10.91283
- [7,]           0.6 11.52092 10.984110 11.91002 11.89679
- [8,]           0.7 10.86896  9.824687 11.58203 11.65865
- [9,]           0.8 11.46745 10.174606 12.23097 12.60418
-[10,]           0.9 11.09571  9.419960 12.05290 12.61238
-[11,]           1.0 11.77155 10.061710 12.72820 13.34573
+      alpha.ptlasso   pooled     mean   Study_1  Study_2  Study_3
+ [1,]           0.0 15.34823 15.68952 13.073108 16.82688 17.16856
+ [2,]           0.1 14.13248 14.28925 12.617130 15.75229 14.49833
+ [3,]           0.2 13.25893 13.24134 12.104252 15.72660 11.89316
+ [4,]           0.3 12.96732 13.02804 12.065310 14.22485 12.79395
+ [5,]           0.4 11.91081 12.04923 10.542700 13.40124 12.20375
+ [6,]           0.5 11.79913 11.93871 10.604418 12.93230 12.27941
+ [7,]           0.6 11.24965 11.34991 10.170764 12.50504 11.37394
+ [8,]           0.7 11.54439 11.85441  9.952413 11.93813 13.67268
+ [9,]           0.8 11.42027 11.62629  9.995206 12.41626 12.46740
+[10,]           0.9 12.09472 12.40493 10.125550 13.24118 13.84805
+[11,]           1.0 12.22409 12.74619  9.318009 13.33728 15.58329
 ```
 
-### 4. Predict on held-out data
+### 3. Predict on held-out data
 
 ``` r
 pred <- predict(
   cv_fit,
   xtest = x_test,
   ytest = y_test,
+  target = NULL,
   alpha.ptlasso = NULL,           # Optional user-specified transfer-learning choice. May be one value or one per study
   alpha.ptlasso.type = "varying", # Either `"fixed"` or `"varying"` when `alpha.ptlasso` is not supplied
   overall.lambda = "lambda.min",  # Lambda rule for overall-model prediction
@@ -194,17 +197,29 @@ Example output:
 [16] ".metric_predictions"
 
 $MSE
-           mean   Study_1  Study_2  Study_3
-overall 17.08658 16.180830 17.03689 18.04201
-ind     10.85992  9.220399 12.22695 11.13242
-pre     10.49054  9.001969 11.74396 10.72569
+           pooled      mean   Study_1  Study_2   Study_3
+overall 16.854384 17.016006 16.005860 17.09683 17.945325
+ind     10.472972 10.640624  9.465725 10.97859 11.477557
+pre      9.942666  9.919378  9.465725 11.10614  9.186269
 
 $r2        
-             mean   Study_1   Study_2   Study_3
-overall 0.5010353 0.5304551 0.5602815 0.4123694
-ind     0.6847592 0.7324370 0.6844250 0.6374158
-pre     0.6954432 0.7387755 0.6968909 0.6506630
+           pooled      mean   Study_1   Study_2   Study_3
+overall 0.5280047 0.5032618 0.5355325 0.5587344 0.4155184
+ind     0.7067117 0.6893791 0.7253180 0.7166449 0.6261745
+pre     0.7215626 0.7131576 0.7253180 0.7133530 0.7008020
 ```
+
+**Note on `pooled` Vs `mean`:**
+
+`pooled`: metric on all stacked samples, so larger studies contribute more
+
+(sample-weighted for MSE/deviance/class error;for AUC it is global pooled ranking, not a simple arithmetic average).
+
+`mean`: average of study-level metrics, each study weight = 1/k.
+
+### 4. Tutorial: **`Target` is all you need**
+
+Please see additional [tutorial](docs/tutorial.html) for **target-aware GPTLasso workflow** with explicit source/target definitions and full end-to-end pipelines.
 
 ## Citation
 

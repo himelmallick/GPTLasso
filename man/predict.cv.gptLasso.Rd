@@ -8,6 +8,7 @@
   object,
   xtest,
   ytest = NULL,
+  target = NULL,
   alpha.ptlasso = NULL,
   alpha.ptlasso.type = c("fixed", "varying"),
   type = c("link", "response", "class"),
@@ -24,6 +25,11 @@
 \item{xtest}{A named list with \code{feature_table}, \code{sample_metadata}, and \code{feature_metadata}.}
 
 \item{ytest}{Optional list of response vectors used to compute performance summaries.}
+
+\item{target}{Optional target study/studies for prediction. Default \code{NULL}
+uses the target configuration stored in \code{object} (or all studies for legacy
+fits). When supplied, \code{xtest} studies must be a subset of the resolved
+target studies.}
 
 \item{alpha.ptlasso}{Optional user-specified transfer-learning choice. May be one value or one per study.}
 
@@ -46,11 +52,13 @@ A \code{predict.cv.gptLasso} object with the same prediction components as
 \code{predict.gptLasso()}, plus:
 \itemize{
 \item \code{alpha.ptlasso}: the chosen transfer-learning value, either fixed or study-specific.
+\item \code{target}: the effective target specification used for prediction.
+\item \code{target.study.names}: normalized target studies used for target-constrained prediction.
 \item \code{fit}: the originating \code{cv.gptLasso} object.
 }
 When \code{ytest} is supplied, the returned object also includes \code{metrics},
 \code{erroverall}, \code{errind}, and \code{errpre}. Each metric table has rows \code{overall},
-\code{ind}, and \code{pre}, and columns \code{mean} plus one column per study.
+\code{ind}, and \code{pre}, and columns \code{pooled}, \code{mean}, plus one column per study.
 }
 \description{
 Resolve one fixed or varying transfer-learning choice from a \code{cv.gptLasso}
