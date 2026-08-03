@@ -1,8 +1,8 @@
 # GPTLasso
 
-This repository houses the R package for multistudy multimodal transfer learning using **Global Pretraining and LASSO (`GPTLasso`)**. It extends the `ptLasso` framework to support global multimodal learning across multiple studies through cooperative-learning-based pretraining and transfer learning.
+This repository houses the R package for multistudy multimodal transfer learning using **Global Pre-Training and Lasso (`GPTLasso`)**. It integrates Pretraining with Cooperative Learning to transfer multimodal knowledge from related source cohorts while maintaining target-specific behavior.
 
-![](figures/framework.png)
+![](figures/gptlasso_workflow_TNR.png)
 
 ## Background
 
@@ -10,7 +10,7 @@ Modern biomedical prediction problems often involve multiple data modalities col
 
 The framework uses a pretrained multimodal model to learn shared structure, then fine-tunes study-level fits for improved local prediction. In simulations and motivating multi-omics applications, the goal is to improve predictive accuracy, estimation quality, and cross-study generalization relative to single-study or single-modal approaches.
 
-**Keywords:** Transfer learning, Cooperative learning, Multistudy analysis, Multimodal Integration, LASSO, Pretraining
+**Keywords:** Transfer learning, Cooperative learning, Multistudy analysis, Multimodal Integration, Lasso, Pretraining
 
 ## Installation
 
@@ -28,7 +28,7 @@ library(GPTLasso)
 
 GPTLasso requires a `x` as a named list containing `feature_table`, `sample_metadata`, and `feature_metadata`.
 
-![](figures/data.png)
+![](figures/input_1.png)
 
 **Note on `study` Labels:**
 
@@ -120,7 +120,7 @@ cv_fit <- cv.gptLasso(
 
 When `foldid` is not specified, the algorithm automatically constructs V folds (i.e., `nfolds = V`) by partitioning samples within each study. The same within-study fold assignments are used consistently across both the individual models and the pretrained models. To fit the cooperative learning–based overall model, samples from the same fold across studies are stacked by view to form the V-fold training datasets.
 
-![](figures/vfolds.png)
+![](figures/fold.png)
 
 Inspect the selected alpha and the performance grid:
 
@@ -147,18 +147,18 @@ Study_1 Study_2 Study_3
       0       0       0 
 
 $errpre
-      alpha.ptlasso   pooled     mean   Study_1  Study_2  Study_3
- [1,]           0.0 15.34823 15.68952 13.073108 16.82688 17.16856
- [2,]           0.1 14.13248 14.28925 12.617130 15.75229 14.49833
- [3,]           0.2 13.25893 13.24134 12.104252 15.72660 11.89316
- [4,]           0.3 12.96732 13.02804 12.065310 14.22485 12.79395
- [5,]           0.4 11.91081 12.04923 10.542700 13.40124 12.20375
- [6,]           0.5 11.79913 11.93871 10.604418 12.93230 12.27941
- [7,]           0.6 11.24965 11.34991 10.170764 12.50504 11.37394
- [8,]           0.7 11.54439 11.85441  9.952413 11.93813 13.67268
- [9,]           0.8 11.42027 11.62629  9.995206 12.41626 12.46740
-[10,]           0.9 12.09472 12.40493 10.125550 13.24118 13.84805
-[11,]           1.0 12.22409 12.74619  9.318009 13.33728 15.58329
+      alpha.ptlasso      mean   Study_1  Study_2  Study_3
+ [1,]           0.0 15.68952 13.073108 16.82688 17.16856
+ [2,]           0.1 14.28925 12.617130 15.75229 14.49833
+ [3,]           0.2 13.24134 12.104252 15.72660 11.89316
+ [4,]           0.3 13.02804 12.065310 14.22485 12.79395
+ [5,]           0.4 12.04923 10.542700 13.40124 12.20375
+ [6,]           0.5 11.93871 10.604418 12.93230 12.27941
+ [7,]           0.6 11.34991 10.170764 12.50504 11.37394
+ [8,]           0.7 11.85441  9.952413 11.93813 13.67268
+ [9,]           0.8 11.62629  9.995206 12.41626 12.46740
+[10,]           0.9 12.40493 10.125550 13.24118 13.84805
+[11,]           1.0 12.74619  9.318009 13.33728 15.58329
 ```
 
 ### 3. Predict on held-out data
@@ -197,16 +197,16 @@ Example output:
 [16] ".metric_predictions"
 
 $MSE
-           pooled      mean   Study_1  Study_2   Study_3
-overall 16.854384 17.016006 16.005860 17.09683 17.945325
-ind     10.472972 10.640624  9.465725 10.97859 11.477557
-pre      9.942666  9.919378  9.465725 11.10614  9.186269
+             mean   Study_1  Study_2   Study_3
+overall 17.016006 16.005860 17.09683 17.945325
+ind     10.640624  9.465725 10.97859 11.477557
+pre     9.919378  9.465725 11.10614  9.186269
 
 $r2        
-           pooled      mean   Study_1   Study_2   Study_3
-overall 0.5280047 0.5032618 0.5355325 0.5587344 0.4155184
-ind     0.7067117 0.6893791 0.7253180 0.7166449 0.6261745
-pre     0.7215626 0.7131576 0.7253180 0.7133530 0.7008020
+           mean   Study_1   Study_2   Study_3
+overall 0.5032618 0.5355325 0.5587344 0.4155184
+ind     0.6893791 0.7253180 0.7166449 0.6261745
+pre     0.7131576 0.7253180 0.7133530 0.7008020
 ```
 
 **Note on `pooled` Vs `mean`:**
