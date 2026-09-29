@@ -7,8 +7,8 @@
 gptLasso(
   x,
   alpha.ptlasso = 0.5,
-  family = c("gaussian", "binomial"),
-  type.measure = c("default", "mse", "auc", "deviance"),
+  family = c("gaussian", "binomial", "cox"),
+  type.measure = c("default", "mse", "auc", "deviance", "C"),
   rho = seq(0, 1, length = 11),
   overall.lambda = c("lambda.1se", "lambda.min"),
   ind.lambda = c("lambda.1se", "lambda.min"),
@@ -36,7 +36,7 @@ metadata must contain \code{featureID} plus a view-mapping column such as
 
 \item{alpha.ptlasso}{Transfer-learning level in \verb{[0, 1]}.}
 
-\item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
+\item{family}{Response family: \code{"gaussian"}, \code{"binomial"}, or \code{"cox"}.}
 
 \item{type.measure}{Cross-validation metric optimized inside the multiview fits.}
 

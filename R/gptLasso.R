@@ -9,7 +9,7 @@
 #'   metadata must contain `featureID` plus a view-mapping column such as
 #'   `featureType`.
 #' @param alpha.ptlasso Transfer-learning level in `[0, 1]`.
-#' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
+#' @param family Response family: `"gaussian"`, `"binomial"`, or `"cox"`.
 #' @param type.measure Cross-validation metric optimized inside the multiview fits.
 #' @param rho Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.
 #' @param overall.lambda Lambda rule used for the stage-one overall model.
@@ -98,8 +98,8 @@
 gptLasso <- function(
     x,
     alpha.ptlasso = 0.5,
-    family = c("gaussian", "binomial"),
-    type.measure = c("default", "mse", "auc", "deviance"),
+    family = c("gaussian", "binomial", "cox"),
+    type.measure = c("default", "mse", "auc", "deviance", "C"),
     rho = seq(0, 1, length = 11),
     overall.lambda = c("lambda.1se", "lambda.min"),
     ind.lambda = c("lambda.1se", "lambda.min"),
@@ -135,6 +135,18 @@ gptLasso <- function(
   if (type.measure == "default") {
     type.measure <- if (family == "gaussian") "mse" else "deviance"
   }
+  allowed.metrics <- switch(
+    family,
+    gaussian = c("mse", "deviance"),
+    binomial = c("auc", "deviance"),
+    cox = c("deviance", "C")
+  )
+  if (!type.measure %in% allowed.metrics) {
+    stop(sprintf(
+      "For %s family, type.measure must be one of: %s.",
+      family, paste(allowed.metrics, collapse = ", ")
+    ))
+  }
   
   overall.lambda <- match.arg(overall.lambda, c("lambda.1se", "lambda.min"))
   ind.lambda <- match.arg(ind.lambda, c("lambda.1se", "lambda.min"))
@@ -152,12 +164,13 @@ gptLasso <- function(
   if (length(rho) < 1L || any(is.na(rho))) {
     stop("rho must contain at least one numeric value.")
   }
-  if (!is.numeric(nfolds) || length(nfolds) != 1L || nfolds < 2) {
-    stop("nfolds must be a single integer greater than or equal to 2.")
+  min.folds <- if (family == "cox") 3L else 2L
+  if (!is.numeric(nfolds) || length(nfolds) != 1L || nfolds < min.folds) {
+    stop(sprintf("nfolds must be a single integer greater than or equal to %d.", min.folds))
   }
   
-  family_fn <- switch(family, gaussian = gaussian, binomial = binomial)
-  input <- ptmv_normalize_container(x, require_y = TRUE, context = "x")
+  family_arg <- switch(family, gaussian = gaussian(), binomial = binomial(), cox = "cox")
+  input <- ptmv_normalize_container(x, require_y = TRUE, context = "x", family = family)
   x <- input$x
   y <- input$y
   k <- input$k
@@ -180,20 +193,49 @@ gptLasso <- function(
   
   if (k == 1L) {
     message("Single-study input detected; falling back to cvar.multiview().")
+    nfolds.single <- min(nfolds, ptmv_response_nobs(y[[1]]))
+    if (family == "cox") {
+      events.single <- sum(as.numeric(y[[1]][, 2]) == 1)
+      if (events.single < 3L) {
+        stop("Cox fitting requires at least 3 observed events in the study.")
+      }
+      nfolds.single <- min(nfolds.single, events.single)
+    }
     return(cvar.multiview(
       x.list = x[[1]],
       y = y[[1]],
-      family = family_fn(),
+      family = family_arg,
       alpha = alpha.glmnet,
       rho = rho,
       s = overall.lambda,
-      nfolds = min(nfolds, length(y[[1]])),
+      nfolds = nfolds.single,
       foldid = if (is.null(foldid)) NULL else ptmv_renumber_foldid(foldid),
       penalty.factor = penalty.factor,
       type.measure = type.measure,
       keep = TRUE,
       ...
     ))
+  }
+  
+  if (family == "cox") {
+    event.counts <- vapply(y, function(yi) sum(as.numeric(yi[, 2]) == 1), integer(1))
+    if (any(event.counts < 3L)) {
+      bad <- names(event.counts)[event.counts < 3L]
+      stop(sprintf(
+        "Cox fitting requires at least 3 observed events in every study; insufficient events in: %s.",
+        paste(bad, collapse = ", ")
+      ))
+    }
+    if (is.null(foldid)) {
+      nfolds <- min(nfolds, min(event.counts), min(n_by_study))
+    } else {
+      if (length(foldid) != N_all) {
+        stop("Provided foldid must have length equal to total N across studies.")
+      }
+      ptmv_validate_cox_folds(
+        y_all, groups_all, ptmv_renumber_foldid(foldid), context = "foldid"
+      )
+    }
   }
   
   if (n_views == 1L) {
@@ -283,19 +325,26 @@ gptLasso <- function(
     foldid_all <- ptmv_renumber_foldid(foldid)
   }
   nfolds_all <- length(unique(foldid_all))
+  if (family == "cox") {
+    ptmv_validate_cox_folds(y_all, groups_all, foldid_all, context = "foldid")
+  }
   
   foldid_within <- split(foldid_all, groups_all)
   foldid_within <- lapply(foldid_within, ptmv_renumber_foldid)
   foldid_within <- foldid_within[target.study.names]
   
-  group_baseline <- ptmv_compute_group_baseline(y, family)
+  group_baseline <- if (family == "cox") {
+    stats::setNames(rep(0, k), study_names)
+  } else {
+    ptmv_compute_group_baseline(y, family)
+  }
   baseline_offset_all <- NULL
-  if (isTRUE(group.intercepts)) {
+  if (isTRUE(group.intercepts) && family != "cox") {
     baseline_offset_all <- ptmv_compute_baseline_offset(
       y_all = y_all,
       groups_all = groups_all,
       foldid_all = foldid_all,
-      family_obj = family_fn()
+      family_obj = family_arg
     )
   }
   
@@ -306,7 +355,7 @@ gptLasso <- function(
     fitoverall <- cvar.multiview(
       x.list = x_list_all,
       y = y_all,
-      family = family_fn(),
+      family = family_arg,
       alpha = alpha.glmnet,
       rho = rho,
       s = overall.lambda,
@@ -314,13 +363,31 @@ gptLasso <- function(
       foldid = foldid_all,
       nfolds = nfolds_all,
       offset = baseline_offset_all,
+      cox.groups = if (family == "cox" && isTRUE(group.intercepts)) groups_all else NULL,
       penalty.factor = penalty.factor,
       keep = TRUE,
       ...
     )
   }
   
-  fitoverall_fit <- fitoverall$multiview.fit
+  if (!identical(ptmv_family_name(fitoverall$family), family)) {
+    stop("fitoverall family is not compatible with the requested family.")
+  }
+  
+  if (family == "cox" && isTRUE(group.intercepts)) {
+    if (!identical(fitoverall$cox.study.effect, "fixed_shift") ||
+        is.null(fitoverall$cox.group.shift)) {
+      stop("A supplied Cox fitoverall with group.intercepts = TRUE must contain compatible fixed study shifts.")
+    }
+    if (!setequal(names(fitoverall$cox.group.shift), study_names)) {
+      stop("Stored Cox study shifts must be named with the training study names.")
+    }
+    group_baseline <- fitoverall$cox.group.shift[study_names]
+    baseline_offset_all <- fitoverall$offset.full
+  } else if (family == "cox" && !is.null(fitoverall$cox.study.effect)) {
+    stop("A supplied Cox fitoverall with group.intercepts = FALSE must not contain study shifts.")
+  }
+  
   lamhat <- fitoverall$lambda.choice
   rho_overall <- fitoverall$rho.choice
   r_idx <- which(fitoverall$rho == rho_overall)[1]
@@ -330,8 +397,7 @@ gptLasso <- function(
   preval.offset <- ptmv_split_vector_by_study(preval_all, n_by_study, study_names)
   preval.offset.target <- preval.offset[target.study.names]
   
-  coef_vec <- as.numeric(coef(fitoverall_fit, s = lamhat))
-  supall <- which(coef_vec[-1] != 0)
+  supall <- ptmv_get_support(fitoverall, lamhat)
   x_target <- x[target.study.names]
   y_target <- y[target.study.names]
   
@@ -346,7 +412,7 @@ gptLasso <- function(
       cvar.multiview(
         x.list = x_target[[kk]],
         y = y_target[[kk]],
-        family = family_fn(),
+        family = family_arg,
         alpha = alpha.glmnet,
         rho = rho,
         foldid = foldid_within[[kk]],
@@ -380,7 +446,7 @@ gptLasso <- function(
       cvar.multiview(
         x.list = x_target[[kk]],
         y = y_target[[kk]],
-        family = family_fn(),
+        family = family_arg,
         alpha = alpha.glmnet,
         rho = rho,
         foldid = foldid_within[[kk]],
@@ -426,6 +492,7 @@ gptLasso <- function(
     }, numeric(1)), target.study.names),
     group.intercepts = group.intercepts,
     group.baseline = group_baseline,
+    cox.study.effect = if (family == "cox" && isTRUE(group.intercepts)) "fixed_shift" else NULL,
     foldid = foldid_all,
     foldid.within = foldid_within,
     support.vars = supall,

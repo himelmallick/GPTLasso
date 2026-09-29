@@ -27,7 +27,7 @@
 #'   \item `suppre.common`: stage-one support reused by the pretrained fits.
 #'   \item `suppre.individual`: additional feature indices selected by the pretrained fits beyond `suppre.common`.
 #'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions when `return.link = TRUE`.
-#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, or `metrics$deviance` as a `3 x (k + 2)` table with rows `overall`, `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
+#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, `metrics$C-index`, or `metrics$deviance` as a `3 x (k + 2)` table with rows `overall`, `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
 #'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance summaries when `ytest` is supplied.
 #'   \item `target`: the effective target specification used for prediction.
 #'   \item `target.study.names`: normalized target studies used for target-constrained prediction.
@@ -153,12 +153,16 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     context = "predict.gptLasso()"
   )
   test.sizes <- xtest.norm$n_by_study
-  ytest <- ptmv_prepare_ytest(ytest, test.study.names, study_sizes = test.sizes)
+  ytest <- ptmv_prepare_ytest(
+    ytest, test.study.names, study_sizes = test.sizes, family = object$family
+  )
   
   x.list.test <- ptmv_stack_by_view(xtest.split, object$view.names)
   overall.baseline.offset <- NULL
   if (isTRUE(object$group.intercepts)) {
     overall.baseline.offset <- ptmv_study_offsets(test.sizes, object$group.baseline[test.study.names])
+  } else if (object$family == "cox") {
+    overall.baseline.offset <- rep(0, sum(test.sizes))
   }
   
   overall.lambda.value <- ptmv_resolve_s(object$fitoverall, overall.lambda)
@@ -219,12 +223,17 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     yhatpre <- lapply(yhatpre, function(x) ifelse(x >= 0.5, 1, 0))
   }
   
-  linkind <- ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = "link")
-  yhatind.resp <- ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = "response")
+  individual.offsets <- if (object$family == "cox") {
+    lapply(test.sizes, function(n) rep(0, n))
+  } else {
+    NULL
+  }
+  linkind <- ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = "link", offsets = individual.offsets)
+  yhatind.resp <- ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = "response", offsets = individual.offsets)
   yhatind <- if (type == "class") {
     yhatind.resp
   } else {
-    ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = type)
+    ptmv_predict_by_study(object$fitind, xtest.split, s = ind.lambda, type = type, offsets = individual.offsets)
   }
   if (type == "class") {
     yhatind <- lapply(yhatind, function(x) ifelse(x >= 0.5, 1, 0))
@@ -237,13 +246,16 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
   
   metrics <- erroverall <- errind <- errpre <- NULL
   if (!is.null(ytest)) {
-    erroverall <- ptmv_summarize_metric(overall.resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
-    errind <- ptmv_summarize_metric(yhatind.resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
-    errpre <- ptmv_summarize_metric(yhatpre.resp, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    overall.metric <- if (object$family == "cox") overall.link else overall.resp
+    ind.metric <- if (object$family == "cox") linkind else yhatind.resp
+    pre.metric <- if (object$family == "cox") linkpre else yhatpre.resp
+    erroverall <- ptmv_summarize_metric(overall.metric, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    errind <- ptmv_summarize_metric(ind.metric, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
+    errpre <- ptmv_summarize_metric(pre.metric, ytest, object$family, object$type.measure, add_r2 = object$family == "gaussian")
     metrics <- ptmv_build_metric_report(
-      overall_preds = overall.resp,
-      ind_preds = yhatind.resp,
-      pre_preds = yhatpre.resp,
+      overall_preds = overall.metric,
+      ind_preds = ind.metric,
+      pre_preds = pre.metric,
       y = ytest,
       family = object$family,
       type.measure = object$type.measure
@@ -271,7 +283,7 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     target = target.out,
     target.study.names = effective.target.study.names,
     metric_predictions = if (!is.null(ytest)) {
-      list(overall = overall.resp, ind = yhatind.resp, pre = yhatpre.resp)
+      list(overall = overall.metric, ind = ind.metric, pre = pre.metric)
     } else {
       NULL
     },
@@ -534,7 +546,8 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     ytest.norm <- ptmv_prepare_ytest(
       ytest,
       predict.study.names,
-      study_sizes = xtest.norm$n_by_study[predict.study.names]
+      study_sizes = xtest.norm$n_by_study[predict.study.names],
+      family = object$family
     )
     family <- object$family
     type.measure <- object$type.measure

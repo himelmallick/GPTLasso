@@ -52,7 +52,7 @@ A \code{predict.gptLasso} object, stored as a list. Important components include
 \item \code{suppre.common}: stage-one support reused by the pretrained fits.
 \item \code{suppre.individual}: additional feature indices selected by the pretrained fits beyond \code{suppre.common}.
 \item \code{linkoverall}, \code{linkind}, \code{linkpre}: optional link-scale predictions when \code{return.link = TRUE}.
-\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, or \code{metrics$deviance} as a \verb{3 x (k + 2)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{pooled}, \code{mean}, plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
+\item \code{metrics}: optional held-out performance summaries when \code{ytest} is supplied. The primary metric is stored in \code{metrics$MSE}, \code{metrics$AUC}, \code{metrics$C-index}, or \code{metrics$deviance} as a \verb{3 x (k + 2)} table with rows \code{overall}, \code{ind}, and \code{pre}, and columns \code{pooled}, \code{mean}, plus one column per study. Gaussian fits also include \code{metrics$r2} with the same layout.
 \item \code{erroverall}, \code{errind}, \code{errpre}: backward-compatible performance summaries when \code{ytest} is supplied.
 \item \code{target}: the effective target specification used for prediction.
 \item \code{target.study.names}: normalized target studies used for target-constrained prediction.

@@ -7,8 +7,8 @@
 cv.gptLasso(
   x,
   alpha.ptlasso.list = seq(0, 1, length = 11),
-  family = c("gaussian", "binomial"),
-  type.measure = c("default", "mse", "auc", "deviance"),
+  family = c("gaussian", "binomial", "cox"),
+  type.measure = c("default", "mse", "auc", "deviance", "C"),
   rho = seq(0, 1, length = 11),
   nfolds = 10,
   foldid = NULL,
@@ -30,7 +30,7 @@ cv.gptLasso(
 
 \item{alpha.ptlasso.list}{Numeric vector of transfer-learning values to compare.}
 
-\item{family}{Response family. Currently \code{"gaussian"} and \code{"binomial"} are supported.}
+\item{family}{Response family: \code{"gaussian"}, \code{"binomial"}, or \code{"cox"}.}
 
 \item{type.measure}{Cross-validation metric used to compare transfer-learning levels.}
 

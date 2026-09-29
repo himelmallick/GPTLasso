@@ -5,7 +5,7 @@
 #'
 #' @param x A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
 #' @param alpha.ptlasso.list Numeric vector of transfer-learning values to compare.
-#' @param family Response family. Currently `"gaussian"` and `"binomial"` are supported.
+#' @param family Response family: `"gaussian"`, `"binomial"`, or `"cox"`.
 #' @param type.measure Cross-validation metric used to compare transfer-learning levels.
 #' @param rho Multiview cooperative-learning fusion parameter, supplied as one value or a tuning grid.
 #' @param nfolds Number of folds used inside each `gptLasso()` fit.
@@ -87,8 +87,8 @@
 cv.gptLasso <- function(
     x,
     alpha.ptlasso.list = seq(0, 1, length = 11),
-    family = c("gaussian", "binomial"),
-    type.measure = c("default", "mse", "auc", "deviance"),
+    family = c("gaussian", "binomial", "cox"),
+    type.measure = c("default", "mse", "auc", "deviance", "C"),
     rho = seq(0, 1, length = 11),
     nfolds = 10,
     foldid = NULL,
@@ -131,6 +131,9 @@ cv.gptLasso <- function(
   }
   if (family == "gaussian" && !(type.measure %in% c("mse", "deviance"))) {
     stop("For gaussian family, type.measure must be 'mse' or 'deviance'.")
+  }
+  if (family == "cox" && !(type.measure %in% c("C", "deviance"))) {
+    stop("For cox family, type.measure must be 'C' or 'deviance'.")
   }
   
   alpha.ptlasso.list <- sort(unique(as.numeric(alpha.ptlasso.list)))
@@ -198,7 +201,7 @@ cv.gptLasso <- function(
     
     err.rows[[ii]] <- c(
       pooled = ptmv_metric_value(
-        unlist(fit[[ii]]$training.layout$y[target.study.names], use.names = FALSE),
+        ptmv_stack_response(fit[[ii]]$training.layout$y[target.study.names]),
         unlist(pred.pre, use.names = FALSE),
         family = family,
         type.measure = type.measure
@@ -213,6 +216,7 @@ cv.gptLasso <- function(
   
   base.fit <- fit[[1]]
   target.study.names <- base.fit$target.study.names
+  metric.prediction.type <- if (family == "cox") "link" else "response"
   overall.pred <- lapply(seq_along(target.study.names), function(kk) {
     study.name <- target.study.names[kk]
     lambda <- ptmv_resolve_s(base.fit$fitoverall, overall.lambda)
@@ -220,9 +224,11 @@ cv.gptLasso <- function(
       base.fit$fitoverall,
       newx = base.fit$training.layout$x[[study.name]],
       s = lambda,
-      type = "response",
+      type = metric.prediction.type,
       newoffset = if (base.fit$group.intercepts) {
         rep(base.fit$group.baseline[study.name], base.fit$n.by.study[study.name])
+      } else if (family == "cox") {
+        rep(0, base.fit$n.by.study[study.name])
       } else {
         NULL
       }
@@ -237,7 +243,8 @@ cv.gptLasso <- function(
         base.fit$fitind[[study.name]],
         newx = base.fit$training.layout$x[[study.name]],
         s = ind.lambda,
-        type = "response"
+        type = metric.prediction.type,
+        newoffset = if (family == "cox") rep(0, base.fit$n.by.study[study.name]) else NULL
       )
     )
   })

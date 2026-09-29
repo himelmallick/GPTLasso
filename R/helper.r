@@ -189,6 +189,10 @@ gen_simmba_multistudy <- function(nsample,
         C <- stats::runif(n_single, cens.lower, cens.upper)
         pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
         pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+        pcl$sample_metadata$Y <- I(survival::Surv(
+          pcl$sample_metadata$time,
+          pcl$sample_metadata$status
+        ))
       }
       
       train <- test <- pcl
@@ -321,6 +325,10 @@ gen_simmba_multistudy <- function(nsample,
         C <- stats::runif(n_s, cens.lower, cens.upper)
         pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
         pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+        pcl$sample_metadata$Y <- I(survival::Surv(
+          pcl$sample_metadata$time,
+          pcl$sample_metadata$status
+        ))
       }
       
       train <- test <- pcl
@@ -561,11 +569,151 @@ sim.binary.data <- function(nsample = c(500, 400, 300),
 # Helper: choose whether a metric should be minimized or maximized.
 # Used in `cv.gptLasso()` when selecting `alpha.ptlasso.hat`.
 ptmv_match_metric <- function(type.measure) {
-  if (type.measure %in% c("auc")) {
+  if (type.measure %in% c("auc", "C")) {
     list(best = which.max, aggregate = max)
   } else {
     list(best = which.min, aggregate = min)
   }
+}
+
+# Helper: normalize a family specification to its canonical name.
+ptmv_family_name <- function(family) {
+  if (is.character(family) && length(family) == 1L) {
+    return(family)
+  }
+  if (is.function(family)) {
+    family <- family()
+  }
+  if (inherits(family, "family")) {
+    return(family$family)
+  }
+  stop("family must be a family object/function or the character string 'cox'.")
+}
+
+# Helper: number of observations without flattening matrix-like responses.
+ptmv_response_nobs <- function(y) {
+  if (inherits(y, "Surv") || is.matrix(y)) {
+    return(nrow(y))
+  }
+  length(y)
+}
+
+# Helper: subset a response while preserving Surv structure.
+ptmv_subset_response <- function(y, i) {
+  if (inherits(y, "Surv") || is.matrix(y)) {
+    return(y[i, , drop = FALSE])
+  }
+  y[i]
+}
+
+# Helper: validate the supported right-censored survival response.
+ptmv_validate_surv <- function(y, context = "y", require_event = TRUE) {
+  if (!inherits(y, "Surv")) {
+    stop(sprintf("%s must be a survival::Surv(time, status) object for family = 'cox'.", context))
+  }
+  if (!identical(attr(y, "type"), "right") || ncol(y) != 2L) {
+    stop(sprintf("%s must be a right-censored two-column Surv(time, status) object.", context))
+  }
+  time <- as.numeric(y[, 1])
+  status <- as.numeric(y[, 2])
+  if (anyNA(time) || any(!is.finite(time)) || any(time <= 0)) {
+    stop(sprintf("%s survival times must be finite and strictly positive.", context))
+  }
+  if (anyNA(status) || any(!status %in% c(0, 1))) {
+    stop(sprintf("%s status values must be coded 0 (censored) or 1 (event).", context))
+  }
+  if (isTRUE(require_event) && sum(status == 1) == 0L) {
+    stop(sprintf("%s must contain at least one observed event.", context))
+  }
+  invisible(TRUE)
+}
+
+# Helper: stack study responses without stripping the Surv class.
+ptmv_stack_response <- function(y) {
+  if (length(y) == 0L) {
+    return(numeric())
+  }
+  if (all(vapply(y, inherits, logical(1), what = "Surv"))) {
+    return(survival::Surv(
+      unlist(lapply(y, function(z) as.numeric(z[, 1])), use.names = FALSE),
+      unlist(lapply(y, function(z) as.numeric(z[, 2])), use.names = FALSE)
+    ))
+  }
+  unlist(y, use.names = FALSE)
+}
+
+# Helper: fit an unpenalized study-only Cox model and return fixed shifts.
+ptmv_fit_cox_study_shift <- function(y, groups, train = rep(TRUE, ptmv_response_nobs(y)),
+                                     weights = NULL) {
+  ptmv_validate_surv(y, context = "Cox study-shift response")
+  groups <- factor(groups)
+  group_levels <- levels(groups)
+  train <- as.logical(train)
+  if (length(train) != ptmv_response_nobs(y)) {
+    stop("Cox study-shift training indicator has the wrong length.")
+  }
+  if (is.null(weights)) {
+    weights <- rep(1, ptmv_response_nobs(y))
+  }
+  if (length(weights) != ptmv_response_nobs(y)) {
+    stop("Cox study-shift weights have the wrong length.")
+  }
+  if (!all(group_levels %in% as.character(groups[train]))) {
+    stop("Every study must be represented in each Cox CV training split.")
+  }
+  if (length(group_levels) == 1L) {
+    return(list(
+      offset = rep(0, length(groups)),
+      shift = stats::setNames(0, group_levels),
+      fit = NULL
+    ))
+  }
+  
+  design <- stats::model.matrix(~ groups)
+  design <- design[, -1, drop = FALSE]
+  fit <- glmnet::bigGlm(
+    x = design[train, , drop = FALSE],
+    y = ptmv_subset_response(y, train),
+    weights = weights[train],
+    family = "cox",
+    path = TRUE,
+    cox.ties = "breslow"
+  )
+  beta <- as.numeric(stats::coef(fit))
+  if (length(beta) != ncol(design) || any(!is.finite(beta))) {
+    stop("The study-only Cox model did not produce finite study shifts.")
+  }
+  shift <- stats::setNames(c(0, beta), group_levels)
+  list(
+    offset = as.numeric(design %*% beta),
+    shift = shift,
+    fit = fit
+  )
+}
+
+# Helper: verify Cox folds contain usable events within every study.
+ptmv_validate_cox_folds <- function(y, groups, foldid, context = "foldid") {
+  ptmv_validate_surv(y, context = "Cox response")
+  groups <- factor(groups)
+  folds <- sort(unique(foldid))
+  if (length(folds) < 3L) {
+    stop(sprintf("%s must contain at least 3 folds for Cox models.", context))
+  }
+  status <- as.numeric(y[, 2])
+  for (g in levels(groups)) {
+    idx_g <- which(groups == g)
+    for (f in folds) {
+      test <- idx_g[foldid[idx_g] == f]
+      train <- idx_g[foldid[idx_g] != f]
+      if (length(test) == 0L || sum(status[test] == 1) == 0L) {
+        stop(sprintf("%s has no observed event for study '%s' in validation fold %s.", context, g, f))
+      }
+      if (length(train) == 0L || sum(status[train] == 1) == 0L) {
+        stop(sprintf("%s has no observed event for study '%s' in training fold %s.", context, g, f))
+      }
+    }
+  }
+  invisible(TRUE)
 }
 
 # Helper: resolve `s` into a numeric lambda value for a cv-style multiview fit.
@@ -654,12 +802,17 @@ ptmv_renumber_foldid <- function(fid) {
   as.integer(fold_map[as.character(as.integer(fid))])
 }
 
-# Helper: create study-level folds with stratification for binomial outcomes.
+# Helper: create study-level folds with stratification for binary event indicators.
 # Used in `gptLasso()`.
 ptmv_make_foldid <- function(n, nfolds, family, y = NULL) {
   nfolds_use <- min(nfolds, n)
-  if (family == "binomial") {
-    y01 <- as.integer(as.numeric(y) > 0)
+  if (family %in% c("binomial", "cox")) {
+    y01 <- if (family == "cox") {
+      ptmv_validate_surv(y, context = "study response")
+      as.integer(y[, 2])
+    } else {
+      as.integer(as.numeric(y) > 0)
+    }
     idx0 <- which(y01 == 0L)
     idx1 <- which(y01 == 1L)
     foldid <- integer(n)
@@ -760,7 +913,7 @@ ptmv_resolve_target_studies <- function(target, study_names, context = "target")
 
 # Helper: normalize and validate Bioconductor-style multistudy input.
 # Used in `gptLasso()`.
-ptmv_normalize_container <- function(x, require_y = TRUE, context = "x") {
+ptmv_normalize_container <- function(x, require_y = TRUE, context = "x", family = NULL) {
   ptmv_require_named_list(x, c("feature_table", "sample_metadata", "feature_metadata"), context)
   
   feature_table <- ptmv_validate_matrix(x$feature_table, sprintf("%s$feature_table", context))
@@ -830,8 +983,13 @@ ptmv_normalize_container <- function(x, require_y = TRUE, context = "x") {
   if (anyNA(study) || any(study == "")) {
     stop(sprintf("%s$sample_metadata$study must be non-missing and non-empty.", context))
   }
-  if (require_y && anyNA(sample_metadata$Y)) {
-    stop(sprintf("%s$sample_metadata$Y must be non-missing for training.", context))
+  family_name <- if (is.null(family)) NULL else ptmv_family_name(family)
+  if (require_y) {
+    if (identical(family_name, "cox")) {
+      ptmv_validate_surv(sample_metadata$Y, sprintf("%s$sample_metadata$Y", context))
+    } else if (anyNA(sample_metadata$Y)) {
+      stop(sprintf("%s$sample_metadata$Y must be non-missing for training.", context))
+    }
   }
   
   view <- as.character(feature_metadata[[view_col]])
@@ -890,12 +1048,30 @@ ptmv_normalize_container <- function(x, require_y = TRUE, context = "x") {
   y_norm <- NULL
   y_all <- NULL
   if (require_y) {
+    response <- sample_metadata$Y
+    if (identical(family_name, "cox")) {
+      response <- survival::Surv(
+        as.numeric(response[, 1]),
+        as.numeric(response[, 2])
+      )
+    }
     y_norm <- lapply(study_names, function(study_name) {
       idx <- sample_metadata$study == study_name
-      drop(sample_metadata$Y[idx])
+      ptmv_subset_response(response, idx)
     })
     names(y_norm) <- study_names
-    y_all <- drop(sample_metadata$Y)
+    y_all <- response
+    if (identical(family_name, "cox")) {
+      for (study_name in study_names) {
+        ptmv_validate_surv(
+          y_norm[[study_name]],
+          sprintf("%s$sample_metadata$Y for study '%s'", context, study_name)
+        )
+      }
+    } else {
+      y_norm <- lapply(y_norm, drop)
+      y_all <- drop(y_all)
+    }
   }
   
   x_list_all <- lapply(view_names, function(view_name) {
@@ -974,7 +1150,7 @@ ptmv_validate_target_newdata <- function(test_study_names, target_study_names, c
 
 # Helper: normalize and validate study-list test outcomes.
 # Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
-ptmv_prepare_ytest <- function(ytest, study_names, study_sizes = NULL) {
+ptmv_prepare_ytest <- function(ytest, study_names, study_sizes = NULL, family = NULL) {
   if (is.null(ytest)) {
     return(NULL)
   }
@@ -988,15 +1164,23 @@ ptmv_prepare_ytest <- function(ytest, study_names, study_sizes = NULL) {
     stop("ytest study names must match the xtest study names exactly.")
   }
   ytest <- ytest[study_names]
+  family_name <- if (is.null(family)) NULL else ptmv_family_name(family)
   out <- lapply(seq_along(ytest), function(i) {
-    yi <- drop(ytest[[i]])
-    if (length(yi) == 0L) {
+    yi <- ytest[[i]]
+    if (identical(family_name, "cox")) {
+      ptmv_validate_surv(yi, sprintf("ytest[['%s']]", study_names[i]))
+      yi <- survival::Surv(as.numeric(yi[, 1]), as.numeric(yi[, 2]))
+    } else {
+      yi <- drop(yi)
+    }
+    ni <- ptmv_response_nobs(yi)
+    if (ni == 0L) {
       stop(sprintf("ytest[['%s']] is empty.", study_names[i]))
     }
-    if (!is.null(study_sizes) && length(yi) != study_sizes[i]) {
+    if (!is.null(study_sizes) && ni != study_sizes[i]) {
       stop(sprintf(
         "ytest[['%s']] has length %d but xtest has %d samples for that study.",
-        study_names[i], length(yi), study_sizes[i]
+        study_names[i], ni, study_sizes[i]
       ))
     }
     yi
@@ -1047,6 +1231,10 @@ ptmv_predict_by_study <- function(model_list, xtest, s, type, offsets = NULL) {
 ptmv_get_support <- function(model, s) {
   lambda <- ptmv_resolve_s(model, s)
   beta <- as.numeric(coef(model$multiview.fit, s = lambda))
+  family_name <- ptmv_family_name(model$family)
+  if (identical(family_name, "cox")) {
+    return(which(beta != 0))
+  }
   which(beta[-1] != 0)
 }
 
@@ -1059,8 +1247,20 @@ ptmv_get_union_support <- function(models, s) {
 # Helper: compute one scalar performance metric for one study or stacked data.
 # Used in `cv.gptLasso()`, `predict.gptLasso()`, and `predict.cv.gptLasso()`.
 ptmv_metric_value <- function(y, pred, family, type.measure) {
-  y <- as.numeric(y)
   pred <- as.numeric(pred)
+  if (family == "cox") {
+    ptmv_validate_surv(y, context = "metric response")
+    if (type.measure == "C") {
+      return(as.numeric(glmnet::Cindex(pred, y)))
+    }
+    if (type.measure == "deviance") {
+      model_dev <- glmnet::coxnet.deviance(pred = pred, y = y)
+      return(as.numeric(model_dev / ptmv_response_nobs(y)))
+    }
+    stop("Unsupported type.measure for cox.")
+  }
+  
+  y <- as.numeric(y)
   
   if (family == "gaussian") {
     if (type.measure %in% c("mse", "deviance")) {
@@ -1109,6 +1309,12 @@ ptmv_metric_name <- function(family, type.measure) {
   if (family == "binomial" && identical(type.measure, "deviance")) {
     return("deviance")
   }
+  if (family == "cox" && identical(type.measure, "C")) {
+    return("C-index")
+  }
+  if (family == "cox" && identical(type.measure, "deviance")) {
+    return("deviance")
+  }
   stop(sprintf(
     "Unsupported metric naming combination: family = '%s', type.measure = '%s'.",
     family, type.measure
@@ -1123,7 +1329,7 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
     ptmv_metric_value(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
   
-  all_y <- unlist(y, use.names = FALSE)
+  all_y <- ptmv_stack_response(y)
   all_pred <- unlist(preds, use.names = FALSE)
   out <- c(
     pooled = ptmv_metric_value(all_y, all_pred, family, type.measure),
@@ -1153,7 +1359,7 @@ ptmv_metric_entries <- function(preds, y, family, type.measure, metric_fun = ptm
     metric_fun(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
   pooled_metric <- metric_fun(
-    unlist(y, use.names = FALSE),
+    ptmv_stack_response(y),
     unlist(preds, use.names = FALSE),
     family,
     type.measure
