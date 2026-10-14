@@ -4,11 +4,17 @@
 #' and pretrained transfer models stored in a `gptLasso` fit.
 #'
 #' @param object A fitted `gptLasso` object.
-#' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
-#' @param ytest Optional list of response vectors used to compute performance summaries.
+#' @param xtest A `MultiAssayExperiment` or PCL-style list with the same views,
+#'   within-view feature layouts, and feature ordering used for training. It may
+#'   use a different supported container type than the training input.
+#' @param ytest Optional list of response vectors used to compute performance
+#'   summaries. When omitted, the outcome stored in `xtest` is used when available.
+#' @param assay.names Assays to use for MAE input. By default, reuse the training
+#'   selections. Must be `NULL` for PCL input.
 #' @param target Optional target study/studies for prediction. Default `NULL`
-#'   uses the target configuration stored in `object` (or all studies for legacy
-#'   fits). When supplied, must be a character vector of training study names.
+#'   uses the target configuration stored in `object` (or all studies when no
+#'   stored target is available). When supplied, it must be a character vector
+#'   of training study names.
 #'   `xtest` studies must be a subset of the resolved target studies.
 #' @param type Prediction scale: `"link"`, `"response"`, or `"class"` for binomial fits.
 #' @param overall.lambda Lambda rule used for overall-model prediction.
@@ -17,18 +23,26 @@
 #' @param return.link Should link-scale predictions also be returned?
 #' @param ... Reserved for future extensions.
 #'
-#' @return A `predict.gptLasso` object, stored as a list. Important components include:
+#' @return A `predict.gptLasso` object, stored as a list with these components:
 #' \itemize{
-#'   \item `yhatoverall`: study-wise predictions from the pooled stage-one fit.
+#'   \item `call`, `alpha.ptlasso`, `type.measure`: prediction call, effective
+#'   transfer value, and metric configuration.
+#'   \item `yhatoverall`: study-wise predictions from the overall all-study fit.
 #'   \item `yhatind`: study-wise predictions from the individual study fits.
 #'   \item `yhatpre`: study-wise predictions from the pretrained transfer fits.
-#'   \item `supoverall`: selected feature indices from the pooled stage-one fit.
+#'   \item `supoverall`: selected feature indices from the overall all-study fit.
 #'   \item `supind`: union of selected feature indices across the individual fits.
 #'   \item `suppre.common`: stage-one support reused by the pretrained fits.
 #'   \item `suppre.individual`: additional feature indices selected by the pretrained fits beyond `suppre.common`.
 #'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions when `return.link = TRUE`.
-#'   \item `metrics`: optional held-out performance summaries when `ytest` is supplied. The primary metric is stored in `metrics$MSE`, `metrics$AUC`, `metrics$C-index`, or `metrics$deviance` as a `3 x (k + 2)` table with rows `overall`, `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study. Gaussian fits also include `metrics$r2` with the same layout.
-#'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance summaries when `ytest` is supplied.
+#'   \item `metrics`: optional held-out performance summaries when outcomes are
+#'   supplied through `ytest` or the test container's sample metadata. The primary metric is
+#'   stored in `metrics$MSE`, `metrics$AUC`, `metrics$C-index`, or
+#'   `metrics$deviance` as a `3 x (k + 1)` table with rows `overall`, `ind`, and
+#'   `pre`, and columns `mean` plus one column per study. Gaussian fits also
+#'   include `metrics$r2` with the same layout.
+#'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance
+#'   vectors when test outcomes are available.
 #'   \item `target`: the effective target specification used for prediction.
 #'   \item `target.study.names`: normalized target studies used for target-constrained prediction.
 #' }
@@ -36,23 +50,23 @@
 #' @examples
 #' # Gaussian prediction example
 #' set.seed(1234)
-#' sim_dat <- sim.gaussian.data()
+#' sim_dat <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+#'                              de.prob = rep(0.5, 3))
 #' x_train <- sim_dat$x_train
 #' x_test <- sim_dat$x_test
-#' ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
 #'
 #' fit_gaussian <- gptLasso(
 #'   x = x_train,
 #'   alpha.ptlasso = 0.5,
 #'   family = "gaussian",
 #'   type.measure = "mse",
+#'   rho = 0,
 #'   nfolds = 3
 #' )
 #'
 #' pred_gaussian <- predict(
 #'   fit_gaussian,
 #'   xtest = x_test,
-#'   ytest = ytest,
 #'   target = NULL,
 #'   type = "response"
 #' )
@@ -61,31 +75,9 @@
 #' str(pred_gaussian$yhatpre)
 #' pred_gaussian$errpre
 #'
-#' # Binomial prediction example
-#' set.seed(5678)
-#' sim_dat_bin <- sim.binary.data()
-#' x_train_bin <- sim_dat_bin$x_train
-#' x_test_bin <- sim_dat_bin$x_test
-#' ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
-#'
-#' fit_binomial <- gptLasso(
-#'   x = x_train_bin,
-#'   alpha.ptlasso = 0.5,
-#'   family = "binomial",
-#'   type.measure = "auc",
-#'   nfolds = 3
-#' )
-#'
-#' pred_binomial <- predict(
-#'   fit_binomial,
-#'   xtest = x_test_bin,
-#'   ytest = ytest_bin,
-#'   type = "response"
-#' )
-#'
-#' pred_binomial$errpre
 #' @export
-predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
+predict.gptLasso <- function(object, xtest, ytest = NULL, assay.names = NULL,
+                             target = NULL,
                              type = c("link", "response", "class"),
                              overall.lambda = c("lambda.min", "lambda.1se"),
                              ind.lambda = c("lambda.min", "lambda.1se"),
@@ -144,7 +136,9 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     ))
   }
   
-  xtest.norm <- ptmv_normalize_newdata(xtest, object$training.layout)
+  xtest.norm <- ptmv_normalize_newdata(
+    xtest, object$training.layout, assay.names = assay.names
+  )
   xtest.split <- xtest.norm$x
   test.study.names <- xtest.norm$study_names
   ptmv_validate_target_newdata(
@@ -153,6 +147,7 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     context = "predict.gptLasso()"
   )
   test.sizes <- xtest.norm$n_by_study
+  if (is.null(ytest) && !is.null(xtest.norm$y)) ytest <- xtest.norm$y
   ytest <- ptmv_prepare_ytest(
     ytest, test.study.names, study_sizes = test.sizes, family = object$family
   )
@@ -298,12 +293,17 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
 #' individual, and pretrained models.
 #'
 #' @param object A fitted `cv.gptLasso` object.
-#' @param xtest A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
-#' @param ytest Optional list of response vectors used to compute performance summaries.
+#' @param xtest A `MultiAssayExperiment` or PCL-style list with the same views,
+#'   within-view feature layouts, and feature ordering used for training. It may
+#'   use a different supported container type than the training input.
+#' @param ytest Optional list of response vectors used to compute performance
+#'   summaries. When omitted, the outcome stored in `xtest` is used when available.
+#' @param assay.names Assays to use for MAE input. By default, reuse the training
+#'   selections. Must be `NULL` for PCL input.
 #' @param target Optional target study/studies for prediction. Default `NULL`
-#'   uses the target configuration stored in `object` (or all studies for legacy
-#'   fits). When supplied, `xtest` studies must be a subset of the resolved
-#'   target studies.
+#'   uses the target configuration stored in `object` (or all studies when no
+#'   stored target is available). When supplied, `xtest` studies must be a
+#'   subset of the resolved target studies.
 #' @param alpha.ptlasso Optional user-specified transfer-learning choice. May be one value or one per study.
 #' @param alpha.ptlasso.type Either `"fixed"` or `"varying"` when `alpha.ptlasso` is not supplied.
 #' @param type Prediction scale: `"link"`, `"response"`, or `"class"` for binomial fits.
@@ -313,38 +313,48 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
 #' @param return.link Should link-scale predictions also be returned?
 #' @param ... Reserved for future extensions.
 #'
-#' @return A `predict.cv.gptLasso` object with the same prediction components as
-#'   `predict.gptLasso()`, plus:
+#' @return A `predict.cv.gptLasso` object, stored as a list with these components:
 #' \itemize{
-#'   \item `alpha.ptlasso`: the chosen transfer-learning value, either fixed or study-specific.
+#'   \item `call`, `alpha.ptlasso`, `type.measure`: prediction call, chosen
+#'   fixed or study-specific transfer values, and metric configuration.
+#'   \item `yhatoverall`, `yhatind`, `yhatpre`: study-wise predictions from the
+#'   overall all-study, individual, and pretrained fits.
+#'   \item `supoverall`, `supind`, `suppre.common`, `suppre.individual`: selected
+#'   overall, individual, shared pretrained, and additional pretrained feature
+#'   indices.
+#'   \item `linkoverall`, `linkind`, `linkpre`: optional link-scale predictions
+#'   when `return.link = TRUE`.
+#'   \item `metrics`: optional held-out metric tables when outcomes are supplied
+#'   through `ytest` or the test container's sample metadata.
+#'   \item `erroverall`, `errind`, `errpre`: backward-compatible performance
+#'   vectors when test outcomes are available.
 #'   \item `target`: the effective target specification used for prediction.
 #'   \item `target.study.names`: normalized target studies used for target-constrained prediction.
 #'   \item `fit`: the originating `cv.gptLasso` object.
 #' }
-#' When `ytest` is supplied, the returned object also includes `metrics`,
-#' `erroverall`, `errind`, and `errpre`. Each metric table has rows `overall`,
-#' `ind`, and `pre`, and columns `pooled`, `mean`, plus one column per study.
+#' Each metric table has rows `overall`, `ind`, and `pre`, and columns `mean`
+#' plus one column per study.
 #'
 #' @examples
 #' # Gaussian cross-validated prediction example
 #' set.seed(1234)
-#' sim_dat <- sim.gaussian.data()
+#' sim_dat <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+#'                              de.prob = rep(0.5, 3))
 #' x_train <- sim_dat$x_train
 #' x_test <- sim_dat$x_test
-#' ytest <- split(x_test$sample_metadata$Y, x_test$sample_metadata$study)
 #'
 #' cv_fit_gaussian <- cv.gptLasso(
 #'   x = x_train,
 #'   family = "gaussian",
 #'   type.measure = "mse",
-#'   alpha.ptlasso.list = c(0, 0.5, 1),
+#'   alpha.ptlasso.list = c(0, 1),
+#'   rho = 0,
 #'   nfolds = 3
 #' )
 #'
 #' pred_cv_gaussian <- predict(
 #'   cv_fit_gaussian,
 #'   xtest = x_test,
-#'   ytest = ytest,
 #'   alpha.ptlasso.type = "fixed",
 #'   type = "response"
 #' )
@@ -352,32 +362,9 @@ predict.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
 #' pred_cv_gaussian$alpha.ptlasso
 #' pred_cv_gaussian$errpre
 #'
-#' # Binomial cross-validated prediction example
-#' set.seed(5678)
-#' sim_dat_bin <- sim.binary.data()
-#' x_train_bin <- sim_dat_bin$x_train
-#' x_test_bin <- sim_dat_bin$x_test
-#' ytest_bin <- split(x_test_bin$sample_metadata$Y, x_test_bin$sample_metadata$study)
-#'
-#' cv_fit_binomial <- cv.gptLasso(
-#'   x = x_train_bin,
-#'   family = "binomial",
-#'   type.measure = "auc",
-#'   alpha.ptlasso.list = c(0, 0.5, 1),
-#'   nfolds = 3
-#' )
-#'
-#' pred_cv_binomial <- predict(
-#'   cv_fit_binomial,
-#'   xtest = x_test_bin,
-#'   ytest = ytest_bin,
-#'   alpha.ptlasso.type = "fixed",
-#'   type = "response"
-#' )
-#'
-#' pred_cv_binomial$fit$alpha.ptlasso.hat
 #' @export
-predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
+predict.cv.gptLasso <- function(object, xtest, ytest = NULL, assay.names = NULL,
+                                target = NULL,
                                 alpha.ptlasso = NULL,
                                 alpha.ptlasso.type = c("fixed", "varying"),
                                 type = c("link", "response", "class"),
@@ -427,7 +414,10 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
     )
   }
   target.out <- if (is.null(target)) object$target else target
-  xtest.norm <- ptmv_normalize_newdata(xtest, fit.template$training.layout)
+  xtest.norm <- ptmv_normalize_newdata(
+    xtest, fit.template$training.layout, assay.names = assay.names
+  )
+  if (is.null(ytest) && !is.null(xtest.norm$y)) ytest <- xtest.norm$y
   predict.study.names <- xtest.norm$study_names
   ptmv_validate_target_newdata(
     test_study_names = predict.study.names,
@@ -465,6 +455,7 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
       fit,
       xtest = xtest,
       ytest = ytest,
+      assay.names = assay.names,
       target = effective.target.study.names,
       type = type,
       overall.lambda = overall.lambda,
@@ -499,6 +490,7 @@ predict.cv.gptLasso <- function(object, xtest, ytest = NULL, target = NULL,
       fit,
       xtest = xtest,
       ytest = ytest,
+      assay.names = assay.names,
       target = effective.target.study.names,
       type = type,
       overall.lambda = overall.lambda,

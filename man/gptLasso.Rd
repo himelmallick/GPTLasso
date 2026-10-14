@@ -6,6 +6,7 @@
 \usage{
 gptLasso(
   x,
+  assay.names = NULL,
   alpha.ptlasso = 0.5,
   family = c("gaussian", "binomial", "cox"),
   type.measure = c("default", "mse", "auc", "deviance", "C"),
@@ -28,11 +29,16 @@ gptLasso(
 )
 }
 \arguments{
-\item{x}{A named list with entries \code{feature_table}, \code{sample_metadata}, and
-\code{feature_metadata}. The feature table must be feature-by-sample, the sample
-metadata must contain \code{sample_id}, \code{study}, and \code{Y}, and the feature
-metadata must contain \code{featureID} plus a view-mapping column such as
-\code{featureType}.}
+\item{x}{Either a \link[MultiAssayExperiment:MultiAssayExperiment]{MultiAssayExperiment::MultiAssayExperiment} with one
+named \link[SummarizedExperiment:SummarizedExperiment]{SummarizedExperiment::SummarizedExperiment} per view, or a PCL-style
+list with \code{feature_table}, \code{sample_metadata}, and \code{feature_metadata}.
+PCL sample metadata must contain \code{sample_id}, \code{study}, and \code{Y}; feature
+metadata must contain \code{featureID} and a recognized view column.}
+
+\item{assay.names}{Assays to use for \code{MultiAssayExperiment} input. Must be
+\code{NULL} for PCL input. For MAE input, \code{NULL} requires one assay per experiment;
+a scalar selects the same assay name in every experiment; a named character
+vector selects one assay per experiment.}
 
 \item{alpha.ptlasso}{Transfer-learning level in \verb{[0, 1]}.}
 
@@ -77,21 +83,41 @@ on all studies.}
 \item{...}{Additional arguments forwarded to the multiview base fitter.}
 }
 \value{
-A \code{gptLasso} object, stored as a list. Important components include:
+A \code{gptLasso} object, stored as a list with these components:
 \itemize{
-\item \code{study.names}: study labels detected from \code{x$sample_metadata$study}.
-\item \code{view.names}: view labels detected from \code{x$feature_metadata}.
-\item \code{n.by.study}: number of samples in each study.
-\item \code{alpha.ptlasso}: the transfer-learning level used for the fit.
-\item \code{fitoverall}: the pooled multiview stage-one fit.
+\item \code{call}: the matched fitting call.
+\item \code{k}, \code{N.all}, \code{n.by.study}: numbers of studies, total samples, and
+samples per study.
+\item \code{study.names}, \code{group.levels}: study labels detected from
+the input sample metadata, in fitting order.
+\item \code{view.names}, \code{n.views}, \code{p.by.view}, \code{features.all}: input view
+names and feature-count summaries.
+\item \code{alpha.ptlasso}, \code{alpha.ptlasso.requested},
+\code{transfer.applicable}: effective/requested transfer values and whether
+cross-study transfer applies.
+\item \code{rho}, \code{rho.requested}, \code{fusion.applicable}: effective/requested
+multiview fusion grids and whether fusion tuning applies.
+\item \code{assay.names}: the selected assay name for each experiment.
+\item \code{alpha.glmnet}, \code{family}, \code{type.measure}: base-learner and response
+configuration.
+\item \code{target}, \code{target.study.names}: supplied and normalized targets.
+\item \code{overall.lambda}, \code{ind.lambda}, \code{pre.lambda}, \code{fitoverall.lambda}:
+requested lambda rules and the selected overall-model lambda.
+\item \code{fitoverall.rho}, \code{fitind.rho}, \code{fitpre.rho}: selected rho values
+for the overall, individual, and pretrained fits.
+\item \code{group.intercepts}, \code{group.intercepts.requested}, \code{group.baseline},
+\code{cox.study.effect}: effective/requested study-baseline configuration.
+\item \code{foldid}, \code{foldid.within}: stacked and within-study fold assignments.
+\item \code{support.vars}, \code{penalty.factor}: selected overall-model feature
+indices and applied penalty factors.
+\item \code{fitoverall}: the overall all-study multiview fit.
 \item \code{fitind}: a named list of study-specific individual fits.
 \item \code{fitpre}: a named list of study-specific pretrained transfer fits.
-\item \code{target}: the user-supplied target specification.
-\item \code{target.study.names}: normalized target studies used for study-specific fitting.
-\item \code{support.vars}: feature indices selected by the overall stage-one fit.
-\item \code{group.baseline}: study-level baseline offsets used when \code{group.intercepts = TRUE}.
-\item \code{preval.offset}: study-wise stage-one linear predictors reused as offsets in pretraining.
-\item \code{training.layout}: the normalized training container split by study and view.
+\item \code{baseline.offset}, \code{preval.offset}: study-baseline and stage-one
+linear-predictor offsets.
+\item \code{training.layout}: the internal study-by-view matrix layout derived
+from the input container.
+\item \code{parallel}, \code{ncores}: effective study-level parallel settings.
 }
 }
 \description{
@@ -101,15 +127,19 @@ for a Bioconductor-style multistudy multiview input container.
 \examples{
 # Gaussian example
 set.seed(1234)
-sim_dat <- sim.gaussian.data()
+sim_dat <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+                             de.prob = rep(0.5, 3))
 x_train <- sim_dat$x_train
-str(x_train)
+names(x_train)
+colnames(x_train$sample_metadata)
+table(x_train$sample_metadata$study)
 
 fit_gaussian <- gptLasso(
   x = x_train,
   alpha.ptlasso = 0.5,
   family = "gaussian",
   type.measure = "mse",
+  rho = 0,
   nfolds = 3
 )
 
@@ -118,6 +148,7 @@ fit_gaussian_target <- gptLasso(
   alpha.ptlasso = 0.5,
   family = "gaussian",
   type.measure = "mse",
+  rho = 0,
   target = "Study_2",
   nfolds = 3
 )
@@ -128,19 +159,4 @@ fit_gaussian$view.names
 fit_gaussian$n.by.study
 fit_gaussian$support.vars
 
-# Binomial example
-set.seed(5678)
-sim_dat_bin <- sim.binary.data()
-x_train_bin <- sim_dat_bin$x_train
-
-fit_binomial <- gptLasso(
-  x = x_train_bin,
-  alpha.ptlasso = 0.5,
-  family = "binomial",
-  type.measure = "auc",
-  nfolds = 3
-)
-
-names(fit_binomial)
-fit_binomial$group.baseline
 }

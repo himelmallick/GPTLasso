@@ -57,6 +57,11 @@
 #'   the single-study generator behavior.
 #' - `rho.beta = 0` yields independent study-specific coefficients.
 #'
+#' This is a low-level simulation generator. Its repetition-by-study lists are
+#' not valid inputs to [gptLasso()] or [cv.gptLasso()]. Use
+#' [sim.gaussian.data()] or [sim.binary.data()] for ready-to-fit combined PCL
+#' objects, or combine the raw per-study output explicitly before fitting.
+#'
 #' @param nsample Number of samples per study. May be a single value or a vector
 #'   of length `nstudy`.
 #' @param nstudy Number of studies.
@@ -82,10 +87,24 @@
 #'   \item `trainDat`: list of simulated training datasets indexed by repetition, then study.
 #'   \item `testDat`: list of simulated testing datasets indexed by repetition, then study.
 #'   \item `true_betas`: shared and study-specific coefficient vectors used to generate the outcomes.
-#'   \item Simulation settings echoed back, including `snr`, `p.train`, `de.prob`,
+#'   \item Simulation settings echoed back, including normalized per-study
+#'   `nsample`, `snr`, `p.train`, `de.prob`,
 #'   `de.downProb`, `de.facLoc`, `de.facScale`, `nrep`, `seed`, `ygen.mode`,
 #'   `outcome.type`, `nstudy`, `rho.beta`, `sigma.alpha`, and `tau.snr`.
 #' }
+#' @examples
+#' raw_sim <- gen_simmba_multistudy(
+#'   nsample = 10, nstudy = 1, nrep = 1,
+#'   de.prob = rep(0.5, 3)
+#' )
+#' raw_sim$nsample
+#' names(raw_sim$trainDat$Rep_1)
+#'
+#' # Use a PCL-returning wrapper for model fitting.
+#' pcl_sim <- sim.gaussian.data(
+#'   nsample = 10, nstudy = 1, de.prob = rep(0.5, 3)
+#' )
+#' names(pcl_sim$x_train)
 #' @export
 gen_simmba_multistudy <- function(nsample,
                                   nstudy = 1,
@@ -105,38 +124,139 @@ gen_simmba_multistudy <- function(nsample,
                                   tau.snr = 0,
                                   nrep = 100,
                                   seed = 1234) {
-  set.seed(seed)
-  
-  ygen.mode <- match.arg(ygen.mode)
-  outcome.type <- match.arg(outcome.type)
-  nsample <- as.integer(nsample)
-  if (length(nsample) == 1L) {
-    nsample_by_study <- rep(nsample, nstudy)
-  } else if (length(nsample) == nstudy) {
-    nsample_by_study <- nsample
-  } else {
-    stop("nsample must be a single value or a vector of length nstudy.")
-  }
-  if (any(is.na(nsample_by_study)) || any(nsample_by_study < 2L)) {
-    stop("nsample must contain integers greater than or equal to 2.")
-  }
-  
-  trainDat <- testDat <- vector("list", nrep)
-  names(trainDat) <- names(testDat) <- paste("Rep", seq_len(nrep), sep = "_")
-  
-  true_betas <- vector("list", nrep)
-  names(true_betas) <- paste0("Rep_", seq_len(nrep))
-  
-  if (nstudy == 1 && rho.beta == 1 && sigma.alpha == 0 && tau.snr == 0) {
-    for (k in seq_len(nrep)) {
-      n_single <- nsample_by_study[1]
-      pcl <- .trigger_InterSIM_safe(n = n_single)
-      X <- as.matrix(t(pcl$feature_table))
+  withr::with_seed(seed, {
+    
+    ygen.mode <- match.arg(ygen.mode)
+    outcome.type <- match.arg(outcome.type)
+    nsample <- as.integer(nsample)
+    if (length(nsample) == 1L) {
+      nsample_by_study <- rep(nsample, nstudy)
+    } else if (length(nsample) == nstudy) {
+      nsample_by_study <- nsample
+    } else {
+      stop("nsample must be a single value or a vector of length nstudy.")
+    }
+    if (any(is.na(nsample_by_study)) || any(nsample_by_study < 2L)) {
+      stop("nsample must contain integers greater than or equal to 2.")
+    }
+    
+    trainDat <- testDat <- vector("list", nrep)
+    names(trainDat) <- names(testDat) <- paste("Rep", seq_len(nrep), sep = "_")
+    
+    true_betas <- vector("list", nrep)
+    names(true_betas) <- paste0("Rep_", seq_len(nrep))
+    
+    if (nstudy == 1 && rho.beta == 1 && sigma.alpha == 0 && tau.snr == 0) {
+      for (k in seq_len(nrep)) {
+        n_single <- nsample_by_study[1]
+        pcl <- .trigger_InterSIM_safe(n = n_single)
+        X <- as.matrix(t(pcl$feature_table))
+        
+        nfeature <- table(pcl$feature_metadata$featureType)
+        de.facs <- vector("list", 3)
+        for (i in seq_len(3)) {
+          de.facs[[i]] <- ptmv_lognormal_factors(
+            n.facs = nfeature[i],
+            sel.prob = de.prob[i],
+            neg.prob = de.downProb[i],
+            fac.loc = de.facLoc[i],
+            fac.scale = de.facScale[i]
+          )
+        }
+        
+        beta0 <- log2(unlist(de.facs))
+        true_betas[[k]] <- list(
+          beta_shared = beta0,
+          beta_indiv = list(Study_1 = rep(0, length(beta0))),
+          beta_s = list(Study_1 = beta0)
+        )
+        
+        eta_lin <- as.numeric(X %*% beta0)
+        
+        if (ygen.mode %in% c("Friedman", "Friedman2")) {
+          nonzero_index <- which(beta0 != 0)
+          if (length(nonzero_index) < 5) {
+            stop("Not enough non-zero coefficients to select 5 Friedman features.")
+          }
+          friedman_index <- sample(nonzero_index, 5)
+          X.friedman <- X[, friedman_index, drop = FALSE]
+          Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
+            20 * (X.friedman[, 3] - 0.5)^2 +
+            10 * X.friedman[, 4] +
+            5 * X.friedman[, 5]
+        }
+        
+        if (ygen.mode == "LM") {
+          eta <- eta_lin
+        } else if (ygen.mode == "Friedman") {
+          eta <- Xbeta.friedman
+        } else {
+          eta <- eta_lin + Xbeta.friedman
+        }
+        
+        pcl$sample_metadata$Xbeta <- eta
+        
+        if (outcome.type == "continuous") {
+          sigma2 <- as.vector(stats::var(eta) / snr)
+          pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(n_single) * sqrt(sigma2))
+        } else if (outcome.type == "binary") {
+          p <- stats::plogis(eta)
+          pcl$sample_metadata$Y <- stats::rbinom(n_single, size = 1, prob = p)
+        } else {
+          h <- as.vector(surv.hscale * exp(eta))
+          X0 <- stats::rexp(n_single, rate = h)
+          C <- stats::runif(n_single, cens.lower, cens.upper)
+          pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
+          pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+          pcl$sample_metadata$Y <- I(survival::Surv(
+            pcl$sample_metadata$time,
+            pcl$sample_metadata$status
+          ))
+        }
+        
+        train <- test <- pcl
+        tr.row <- sample.int(n_single, size = round(n_single * p.train), replace = FALSE)
+        train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
+        test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
+        train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
+        test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
+        trainDat[[k]] <- list(Study_1 = train)
+        testDat[[k]] <- list(Study_1 = test)
+      }
       
-      nfeature <- table(pcl$feature_metadata$featureType)
-      de.facs <- vector("list", 3)
+      return(list(
+        trainDat = trainDat,
+        testDat = testDat,
+        true_betas = true_betas,
+        snr = snr,
+        p.train = p.train,
+        de.prob = de.prob,
+        de.downProb = de.downProb,
+        de.facLoc = de.facLoc,
+        de.facScale = de.facScale,
+        nrep = nrep,
+        seed = seed,
+        ygen.mode = ygen.mode,
+        outcome.type = outcome.type,
+        surv.hscale = surv.hscale,
+        cens.lower = cens.lower,
+        cens.upper = cens.upper,
+        nstudy = nstudy,
+        rho.beta = rho.beta,
+        sigma.alpha = sigma.alpha,
+        tau.snr = tau.snr
+      ))
+    }
+    
+    for (k in seq_len(nrep)) {
+      pcl_template <- .trigger_InterSIM_safe(n = nsample_by_study[1])
+      X_template <- as.matrix(t(pcl_template$feature_table))
+      nfeature <- table(pcl_template$feature_metadata$featureType)
+      p <- nrow(pcl_template$feature_table)
+      
+      de.facs.shared <- vector("list", 3)
       for (i in seq_len(3)) {
-        de.facs[[i]] <- splatter:::getLNormFactors(
+        de.facs.shared[[i]] <- ptmv_lognormal_factors(
           n.facs = nfeature[i],
           sel.prob = de.prob[i],
           neg.prob = de.downProb[i],
@@ -144,71 +264,111 @@ gen_simmba_multistudy <- function(nsample,
           fac.scale = de.facScale[i]
         )
       }
+      beta_shared <- log2(unlist(de.facs.shared))
       
-      beta0 <- log2(unlist(de.facs))
+      train_list <- vector("list", nstudy)
+      test_list <- vector("list", nstudy)
+      names(train_list) <- names(test_list) <- paste0("Study_", seq_len(nstudy))
+      
       true_betas[[k]] <- list(
-        beta_shared = beta0,
-        beta_indiv = list(Study_1 = rep(0, length(beta0))),
-        beta_s = list(Study_1 = beta0)
+        beta_shared = beta_shared,
+        beta_indiv = vector("list", nstudy),
+        beta_s = vector("list", nstudy)
       )
+      names(true_betas[[k]]$beta_indiv) <- paste0("Study_", seq_len(nstudy))
+      names(true_betas[[k]]$beta_s) <- paste0("Study_", seq_len(nstudy))
       
-      eta_lin <- as.numeric(X %*% beta0)
-      
-      if (ygen.mode %in% c("Friedman", "Friedman2")) {
-        nonzero_index <- which(beta0 != 0)
-        if (length(nonzero_index) < 5) {
-          stop("Not enough non-zero coefficients to select 5 Friedman features.")
+      for (s in seq_len(nstudy)) {
+        n_s <- nsample_by_study[s]
+        if (rho.beta < 1) {
+          de.facs.indiv <- vector("list", 3)
+          for (i in seq_len(3)) {
+            de.facs.indiv[[i]] <- ptmv_lognormal_factors(
+              n.facs = nfeature[i],
+              sel.prob = de.prob[i],
+              neg.prob = de.downProb[i],
+              fac.loc = de.facLoc[i],
+              fac.scale = de.facScale[i]
+            )
+          }
+          beta_indiv <- log2(unlist(de.facs.indiv))
+        } else {
+          beta_indiv <- rep(0, length(beta_shared))
         }
-        friedman_index <- sample(nonzero_index, 5)
-        X.friedman <- X[, friedman_index, drop = FALSE]
-        Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
-          20 * (X.friedman[, 3] - 0.5)^2 +
-          10 * X.friedman[, 4] +
-          5 * X.friedman[, 5]
+        
+        beta_s <- sqrt(rho.beta) * beta_shared + sqrt(1 - rho.beta) * beta_indiv
+        true_betas[[k]]$beta_indiv[[s]] <- beta_indiv
+        true_betas[[k]]$beta_s[[s]] <- beta_s
+        
+        alpha_s <- if (sigma.alpha > 0) stats::rnorm(1, 0, sigma.alpha) else 0
+        log_snr_s <- if (tau.snr > 0) log(snr) + stats::rnorm(1, 0, tau.snr) else log(snr)
+        snr_s <- exp(log_snr_s)
+        
+        pcl <- if (s == 1) pcl_template else .trigger_InterSIM_safe(n = n_s)
+        X <- as.matrix(t(pcl$feature_table))
+        eta_lin <- as.numeric(X %*% beta_s) + alpha_s
+        
+        if (ygen.mode %in% c("Friedman", "Friedman2")) {
+          nonzero_index <- which(beta_s != 0)
+          if (length(nonzero_index) < 5) {
+            stop("Not enough non-zero coefficients to select 5 Friedman features.")
+          }
+          friedman_index <- sample(nonzero_index, 5)
+          X.friedman <- X[, friedman_index, drop = FALSE]
+          Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
+            20 * (X.friedman[, 3] - 0.5)^2 +
+            10 * X.friedman[, 4] +
+            5 * X.friedman[, 5]
+        }
+        
+        if (ygen.mode == "LM") {
+          eta <- eta_lin
+        } else if (ygen.mode == "Friedman") {
+          eta <- Xbeta.friedman
+        } else {
+          eta <- eta_lin + Xbeta.friedman
+        }
+        
+        pcl$sample_metadata$Xbeta <- eta
+        pcl$sample_metadata$study <- paste0("Study_", s)
+        
+        if (outcome.type == "continuous") {
+          sigma2 <- as.vector(stats::var(eta) / snr_s)
+          pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(n_s) * sqrt(sigma2))
+        } else if (outcome.type == "binary") {
+          p_prob <- stats::plogis(eta)
+          pcl$sample_metadata$Y <- stats::rbinom(n_s, size = 1, prob = p_prob)
+        } else {
+          h <- as.vector(surv.hscale * exp(eta))
+          X0 <- stats::rexp(n_s, rate = h)
+          C <- stats::runif(n_s, cens.lower, cens.upper)
+          pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
+          pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
+          pcl$sample_metadata$Y <- I(survival::Surv(
+            pcl$sample_metadata$time,
+            pcl$sample_metadata$status
+          ))
+        }
+        
+        train <- test <- pcl
+        tr.row <- sample.int(n_s, size = round(n_s * p.train), replace = FALSE)
+        train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
+        test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
+        train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
+        test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
+        train_list[[s]] <- train
+        test_list[[s]] <- test
       }
       
-      if (ygen.mode == "LM") {
-        eta <- eta_lin
-      } else if (ygen.mode == "Friedman") {
-        eta <- Xbeta.friedman
-      } else {
-        eta <- eta_lin + Xbeta.friedman
-      }
-      
-      pcl$sample_metadata$Xbeta <- eta
-      
-      if (outcome.type == "continuous") {
-        sigma2 <- as.vector(stats::var(eta) / snr)
-        pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(n_single) * sqrt(sigma2))
-      } else if (outcome.type == "binary") {
-        p <- stats::plogis(eta)
-        pcl$sample_metadata$Y <- stats::rbinom(n_single, size = 1, prob = p)
-      } else {
-        h <- as.vector(surv.hscale * exp(eta))
-        X0 <- stats::rexp(n_single, rate = h)
-        C <- stats::runif(n_single, cens.lower, cens.upper)
-        pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
-        pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
-        pcl$sample_metadata$Y <- I(survival::Surv(
-          pcl$sample_metadata$time,
-          pcl$sample_metadata$status
-        ))
-      }
-      
-      train <- test <- pcl
-      tr.row <- sample.int(n_single, size = round(n_single * p.train), replace = FALSE)
-      train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
-      test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
-      train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
-      test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
-      trainDat[[k]] <- list(Study_1 = train)
-      testDat[[k]] <- list(Study_1 = test)
+      trainDat[[k]] <- train_list
+      testDat[[k]] <- test_list
     }
     
-    return(list(
+    list(
       trainDat = trainDat,
       testDat = testDat,
       true_betas = true_betas,
+      nsample = nsample_by_study,
       snr = snr,
       p.train = p.train,
       de.prob = de.prob,
@@ -226,147 +386,22 @@ gen_simmba_multistudy <- function(nsample,
       rho.beta = rho.beta,
       sigma.alpha = sigma.alpha,
       tau.snr = tau.snr
-    ))
-  }
-  
-  for (k in seq_len(nrep)) {
-    pcl_template <- .trigger_InterSIM_safe(n = nsample_by_study[1])
-    X_template <- as.matrix(t(pcl_template$feature_table))
-    nfeature <- table(pcl_template$feature_metadata$featureType)
-    p <- nrow(pcl_template$feature_table)
-    
-    de.facs.shared <- vector("list", 3)
-    for (i in seq_len(3)) {
-      de.facs.shared[[i]] <- splatter:::getLNormFactors(
-        n.facs = nfeature[i],
-        sel.prob = de.prob[i],
-        neg.prob = de.downProb[i],
-        fac.loc = de.facLoc[i],
-        fac.scale = de.facScale[i]
-      )
-    }
-    beta_shared <- log2(unlist(de.facs.shared))
-    
-    train_list <- vector("list", nstudy)
-    test_list <- vector("list", nstudy)
-    names(train_list) <- names(test_list) <- paste0("Study_", seq_len(nstudy))
-    
-    true_betas[[k]] <- list(
-      beta_shared = beta_shared,
-      beta_indiv = vector("list", nstudy),
-      beta_s = vector("list", nstudy)
     )
-    names(true_betas[[k]]$beta_indiv) <- paste0("Study_", seq_len(nstudy))
-    names(true_betas[[k]]$beta_s) <- paste0("Study_", seq_len(nstudy))
-    
-    for (s in seq_len(nstudy)) {
-      n_s <- nsample_by_study[s]
-      if (rho.beta < 1) {
-        de.facs.indiv <- vector("list", 3)
-        for (i in seq_len(3)) {
-          de.facs.indiv[[i]] <- splatter:::getLNormFactors(
-            n.facs = nfeature[i],
-            sel.prob = de.prob[i],
-            neg.prob = de.downProb[i],
-            fac.loc = de.facLoc[i],
-            fac.scale = de.facScale[i]
-          )
-        }
-        beta_indiv <- log2(unlist(de.facs.indiv))
-      } else {
-        beta_indiv <- rep(0, length(beta_shared))
-      }
-      
-      beta_s <- sqrt(rho.beta) * beta_shared + sqrt(1 - rho.beta) * beta_indiv
-      true_betas[[k]]$beta_indiv[[s]] <- beta_indiv
-      true_betas[[k]]$beta_s[[s]] <- beta_s
-      
-      alpha_s <- if (sigma.alpha > 0) stats::rnorm(1, 0, sigma.alpha) else 0
-      log_snr_s <- if (tau.snr > 0) log(snr) + stats::rnorm(1, 0, tau.snr) else log(snr)
-      snr_s <- exp(log_snr_s)
-      
-      pcl <- if (s == 1) pcl_template else .trigger_InterSIM_safe(n = n_s)
-      X <- as.matrix(t(pcl$feature_table))
-      eta_lin <- as.numeric(X %*% beta_s) + alpha_s
-      
-      if (ygen.mode %in% c("Friedman", "Friedman2")) {
-        nonzero_index <- which(beta_s != 0)
-        if (length(nonzero_index) < 5) {
-          stop("Not enough non-zero coefficients to select 5 Friedman features.")
-        }
-        friedman_index <- sample(nonzero_index, 5)
-        X.friedman <- X[, friedman_index, drop = FALSE]
-        Xbeta.friedman <- 10 * sin(pi * X.friedman[, 1] * X.friedman[, 2]) +
-          20 * (X.friedman[, 3] - 0.5)^2 +
-          10 * X.friedman[, 4] +
-          5 * X.friedman[, 5]
-      }
-      
-      if (ygen.mode == "LM") {
-        eta <- eta_lin
-      } else if (ygen.mode == "Friedman") {
-        eta <- Xbeta.friedman
-      } else {
-        eta <- eta_lin + Xbeta.friedman
-      }
-      
-      pcl$sample_metadata$Xbeta <- eta
-      pcl$sample_metadata$study <- paste0("Study_", s)
-      
-      if (outcome.type == "continuous") {
-        sigma2 <- as.vector(stats::var(eta) / snr_s)
-        pcl$sample_metadata$Y <- as.vector(eta + stats::rnorm(n_s) * sqrt(sigma2))
-      } else if (outcome.type == "binary") {
-        p_prob <- stats::plogis(eta)
-        pcl$sample_metadata$Y <- stats::rbinom(n_s, size = 1, prob = p_prob)
-      } else {
-        h <- as.vector(surv.hscale * exp(eta))
-        X0 <- stats::rexp(n_s, rate = h)
-        C <- stats::runif(n_s, cens.lower, cens.upper)
-        pcl$sample_metadata$time <- ifelse(C >= X0, X0, C)
-        pcl$sample_metadata$status <- ifelse(C >= X0, 1L, 0L)
-        pcl$sample_metadata$Y <- I(survival::Surv(
-          pcl$sample_metadata$time,
-          pcl$sample_metadata$status
-        ))
-      }
-      
-      train <- test <- pcl
-      tr.row <- sample.int(n_s, size = round(n_s * p.train), replace = FALSE)
-      train$sample_metadata <- pcl$sample_metadata[tr.row, , drop = FALSE]
-      test$sample_metadata <- pcl$sample_metadata[-tr.row, , drop = FALSE]
-      train$feature_table <- pcl$feature_table[, tr.row, drop = FALSE]
-      test$feature_table <- pcl$feature_table[, -tr.row, drop = FALSE]
-      train_list[[s]] <- train
-      test_list[[s]] <- test
-    }
-    
-    trainDat[[k]] <- train_list
-    testDat[[k]] <- test_list
-  }
-  
-  list(
-    trainDat = trainDat,
-    testDat = testDat,
-    true_betas = true_betas,
-    snr = snr,
-    p.train = p.train,
-    de.prob = de.prob,
-    de.downProb = de.downProb,
-    de.facLoc = de.facLoc,
-    de.facScale = de.facScale,
-    nrep = nrep,
-    seed = seed,
-    ygen.mode = ygen.mode,
-    outcome.type = outcome.type,
-    surv.hscale = surv.hscale,
-    cens.lower = cens.lower,
-    cens.upper = cens.upper,
-    nstudy = nstudy,
-    rho.beta = rho.beta,
-    sigma.alpha = sigma.alpha,
-    tau.snr = tau.snr
-  )
+  })
+}
+
+## Generate sparse log-normal multiplication factors without relying on
+## unexported functions from another package.
+ptmv_lognormal_factors <- function(n.facs, sel.prob, neg.prob,
+                                   fac.loc, fac.scale) {
+  selected <- as.logical(stats::rbinom(n.facs, 1, sel.prob))
+  n.selected <- sum(selected)
+  direction <- (-1)^stats::rbinom(n.selected, 1, neg.prob)
+  values <- stats::rlnorm(n.selected, fac.loc, fac.scale)
+  direction[values < 1] <- -direction[values < 1]
+  factors <- rep(1, n.facs)
+  factors[selected] <- values^direction
+  factors
 }
 
 ptmv_build_sim_container <- function(sim_obj, rep_id = "Rep_1", dataset = c("trainDat", "testDat")) {
@@ -426,6 +461,12 @@ ptmv_build_sim_container <- function(sim_obj, rep_id = "Rep_1", dataset = c("tra
   if (!identical(sample_metadata$sample_id, colnames(feature_table))) {
     stop("Failed to align sample_metadata to the concatenated feature table.")
   }
+  if (all(c("time", "status") %in% colnames(sample_metadata))) {
+    sample_metadata$Y <- I(survival::Surv(
+      as.numeric(sample_metadata$time),
+      as.numeric(sample_metadata$status)
+    ))
+  }
   rownames(sample_metadata) <- sample_metadata$sample_id
   
   feature_metadata <- as.data.frame(reference_feature_metadata, stringsAsFactors = FALSE)
@@ -434,7 +475,6 @@ ptmv_build_sim_container <- function(sim_obj, rep_id = "Rep_1", dataset = c("tra
   }
   feature_metadata <- feature_metadata[match(feature_order, feature_metadata$featureID), , drop = FALSE]
   rownames(feature_metadata) <- feature_metadata$featureID
-  
   list(
     feature_table = feature_table,
     sample_metadata = sample_metadata,
@@ -451,13 +491,17 @@ ptmv_build_sim_container <- function(sim_obj, rep_id = "Rep_1", dataset = c("tra
 #'
 #' @return A list with:
 #' \itemize{
-#'   \item `x_train`: a Bioconductor-style multistudy multiview training container.
-#'   \item `x_test`: a matching held-out test container with the same feature and view layout.
+#'   \item `x_train`: a PCL-style training object with `feature_table`,
+#'   `sample_metadata`, and `feature_metadata`.
+#'   \item `x_test`: a matching PCL-style test object with the same feature and
+#'   view layout.
 #' }
 #' @examples
-#' sim_dat <- sim.gaussian.data()
+#' sim_dat <- sim.gaussian.data(nsample = 10, nstudy = 1,
+#'                              de.prob = rep(0.5, 3))
 #' names(sim_dat)
-#' str(sim_dat$x_train$sample_metadata)
+#' names(sim_dat$x_train)
+#' head(sim_dat$x_train$sample_metadata)
 #' @export
 sim.gaussian.data <- function(nsample = c(500, 400, 300),
                               nstudy = 3,
@@ -513,11 +557,14 @@ sim.gaussian.data <- function(nsample = c(500, 400, 300),
 #'
 #' @return A list with:
 #' \itemize{
-#'   \item `x_train`: a Bioconductor-style multistudy multiview training container.
-#'   \item `x_test`: a matching held-out test container with the same feature and view layout.
+#'   \item `x_train`: a PCL-style training object with `feature_table`,
+#'   `sample_metadata`, and `feature_metadata`.
+#'   \item `x_test`: a matching PCL-style test object with the same feature and
+#'   view layout.
 #' }
 #' @examples
-#' sim_dat <- sim.binary.data()
+#' sim_dat <- sim.binary.data(nsample = 10, nstudy = 1,
+#'                            de.prob = rep(0.5, 3))
 #' names(sim_dat)
 #' table(sim_dat$x_train$sample_metadata$Y)
 #' @export
@@ -842,47 +889,6 @@ ptmv_maybe_parallel_lapply <- function(X, FUN, parallel = FALSE, ncores = 1L,
   parallel::mclapply(X, FUN, ..., mc.cores = ncores_use)
 }
 
-ptmv_require_named_list <- function(x, required_names, context) {
-  if (!is.list(x) || length(x) == 0L) {
-    stop(sprintf("%s must be a non-empty list.", context))
-  }
-  missing_names <- setdiff(required_names, names(x))
-  if (length(missing_names) > 0L) {
-    stop(sprintf(
-      "%s must contain the items: %s.",
-      context,
-      paste(required_names, collapse = ", ")
-    ))
-  }
-}
-
-ptmv_detect_view_column <- function(feature_metadata, context) {
-  candidates <- c("featureType", "view", "feature_view", "view_name")
-  hit <- intersect(candidates, colnames(feature_metadata))
-  if (length(hit) > 0L) {
-    return(hit[1])
-  }
-  
-  if (ncol(feature_metadata) == 2L) {
-    return(colnames(feature_metadata)[2])
-  }
-  
-  stop(sprintf(
-    "%s must contain a view column such as 'featureType' or 'view'.",
-    context
-  ))
-}
-
-ptmv_validate_matrix <- function(x, context) {
-  if (is.data.frame(x)) {
-    x <- as.matrix(x)
-  }
-  if (!is.matrix(x)) {
-    stop(sprintf("%s must be a matrix or data.frame coercible to a matrix.", context))
-  }
-  x
-}
-
 # Helper: resolve user-supplied target studies against training study names.
 # Used in `gptLasso()`, `cv.gptLasso()`, and prediction wrappers.
 ptmv_resolve_target_studies <- function(target, study_names, context = "target") {
@@ -911,39 +917,117 @@ ptmv_resolve_target_studies <- function(target, study_names, context = "target")
   out
 }
 
-# Helper: normalize and validate Bioconductor-style multistudy input.
-# Used in `gptLasso()`.
-ptmv_normalize_container <- function(x, require_y = TRUE, context = "x", family = NULL) {
-  ptmv_require_named_list(x, c("feature_table", "sample_metadata", "feature_metadata"), context)
+ptmv_resolve_assay_names <- function(experiments, assay.names, context) {
+  view_names <- names(experiments)
+  if (is.null(view_names) || anyNA(view_names) || any(view_names == "") ||
+      anyDuplicated(view_names)) {
+    stop(sprintf("%s experiments must have unique, non-empty names.", context))
+  }
   
-  feature_table <- ptmv_validate_matrix(x$feature_table, sprintf("%s$feature_table", context))
+  available <- lapply(experiments, function(experiment) {
+    names(SummarizedExperiment::assays(experiment))
+  })
+  if (is.null(assay.names)) {
+    counts <- lengths(available)
+    if (any(counts != 1L)) {
+      bad <- view_names[counts != 1L]
+      stop(sprintf(
+        paste0("assay.names = NULL requires exactly one assay per experiment; ",
+               "select assays explicitly for: %s."),
+        paste(bad, collapse = ", ")
+      ))
+    }
+    selected <- vapply(available, `[[`, character(1), 1L)
+  } else if (is.character(assay.names) && length(assay.names) == 1L &&
+             is.null(names(assay.names))) {
+    selected <- stats::setNames(rep(assay.names, length(view_names)), view_names)
+  } else if (is.character(assay.names) && length(assay.names) == length(view_names) &&
+             !is.null(names(assay.names)) && setequal(names(assay.names), view_names)) {
+    selected <- assay.names[view_names]
+  } else {
+    stop(paste0(
+      "assay.names must be NULL, a scalar assay name, or a named character ",
+      "vector whose names exactly match the experiment names."
+    ))
+  }
+  names(selected) <- view_names
+  
+  missing <- vapply(view_names, function(view_name) {
+    !(selected[[view_name]] %in% available[[view_name]])
+  }, logical(1))
+  if (any(missing)) {
+    detail <- paste(
+      sprintf("%s='%s'", view_names[missing], selected[missing]),
+      collapse = ", "
+    )
+    stop(sprintf("Selected assay(s) are absent from %s: %s.", context, detail))
+  }
+  selected
+}
+
+# Helpers for the legacy PCL-style list input.
+ptmv_require_named_list <- function(x, required_names, context) {
+  if (!is.list(x) || length(x) == 0L) {
+    stop(sprintf("%s must be a non-empty list.", context))
+  }
+  missing_names <- setdiff(required_names, names(x))
+  if (length(missing_names) > 0L) {
+    stop(sprintf(
+      "%s must contain the items: %s.",
+      context, paste(required_names, collapse = ", ")
+    ))
+  }
+}
+
+ptmv_detect_view_column <- function(feature_metadata, context) {
+  candidates <- c("featureType", "view", "feature_view", "view_name")
+  hit <- intersect(candidates, colnames(feature_metadata))
+  if (length(hit) > 0L) return(hit[[1L]])
+  if (ncol(feature_metadata) == 2L) return(colnames(feature_metadata)[[2L]])
+  stop(sprintf(
+    "%s must contain a view column such as 'featureType' or 'view'.",
+    context
+  ))
+}
+
+ptmv_validate_matrix <- function(x, context) {
+  if (is.data.frame(x)) x <- as.matrix(x)
+  if (!is.matrix(x)) {
+    stop(sprintf("%s must be a matrix or data.frame coercible to a matrix.", context))
+  }
+  x
+}
+
+# Normalize the exact legacy PCL contract into the common study-by-view layout.
+ptmv_normalize_pcl_container <- function(x, require_y = TRUE, context = "x",
+                                         family = NULL, assay.names = NULL) {
+  if (!is.null(assay.names)) {
+    stop("assay.names applies only to MultiAssayExperiment input and must be NULL for PCL input.")
+  }
+  ptmv_require_named_list(
+    x, c("feature_table", "sample_metadata", "feature_metadata"), context
+  )
+  feature_table <- ptmv_validate_matrix(
+    x$feature_table, sprintf("%s$feature_table", context)
+  )
   sample_metadata <- as.data.frame(x$sample_metadata, stringsAsFactors = FALSE)
   feature_metadata <- as.data.frame(x$feature_metadata, stringsAsFactors = FALSE)
   
   sample_required <- c("sample_id", "study")
-  if (require_y) {
-    sample_required <- c(sample_required, "Y")
-  }
+  if (require_y) sample_required <- c(sample_required, "Y")
   sample_missing <- setdiff(sample_required, colnames(sample_metadata))
   if (length(sample_missing) > 0L) {
     stop(sprintf(
       "%s$sample_metadata must contain the columns: %s.",
-      context,
-      paste(sample_required, collapse = ", ")
+      context, paste(sample_required, collapse = ", ")
     ))
   }
-  
-  view_col <- ptmv_detect_view_column(feature_metadata, sprintf("%s$feature_metadata", context))
-  feature_required <- c("featureID", view_col)
-  feature_missing <- setdiff(feature_required, colnames(feature_metadata))
-  if (length(feature_missing) > 0L) {
-    stop(sprintf(
-      "%s$feature_metadata must contain the columns: %s.",
-      context,
-      paste(feature_required, collapse = ", ")
-    ))
+  view_col <- ptmv_detect_view_column(
+    feature_metadata, sprintf("%s$feature_metadata", context)
+  )
+  if (!("featureID" %in% colnames(feature_metadata))) {
+    stop(sprintf("%s$feature_metadata must contain the column: featureID.", context))
   }
-  
   if (is.null(colnames(feature_table))) {
     stop(sprintf("%s$feature_table must have sample IDs as column names.", context))
   }
@@ -965,38 +1049,42 @@ ptmv_normalize_container <- function(x, require_y = TRUE, context = "x", family 
   if (anyDuplicated(feature_id)) {
     stop(sprintf("%s$feature_metadata$featureID must be unique.", context))
   }
-  
   if (!identical(colnames(feature_table), sample_id)) {
     stop(sprintf(
-      "Sample order mismatch: %s$sample_metadata$sample_id must exactly match colnames(%s$feature_table).",
-      context, context
+      paste0("Sample order mismatch: %s$sample_metadata$sample_id must exactly ",
+             "match colnames(%s$feature_table)."), context, context
     ))
   }
   if (!identical(rownames(feature_table), feature_id)) {
     stop(sprintf(
-      "Feature order mismatch: %s$feature_metadata$featureID must exactly match rownames(%s$feature_table).",
-      context, context
+      paste0("Feature order mismatch: %s$feature_metadata$featureID must exactly ",
+             "match rownames(%s$feature_table)."), context, context
     ))
   }
   
   study <- as.character(sample_metadata$study)
+  view <- as.character(feature_metadata[[view_col]])
   if (anyNA(study) || any(study == "")) {
     stop(sprintf("%s$sample_metadata$study must be non-missing and non-empty.", context))
   }
-  family_name <- if (is.null(family)) NULL else ptmv_family_name(family)
-  if (require_y) {
-    if (identical(family_name, "cox")) {
-      ptmv_validate_surv(sample_metadata$Y, sprintf("%s$sample_metadata$Y", context))
-    } else if (anyNA(sample_metadata$Y)) {
-      stop(sprintf("%s$sample_metadata$Y must be non-missing for training.", context))
-    }
-  }
-  
-  view <- as.character(feature_metadata[[view_col]])
   if (anyNA(view) || any(view == "")) {
-    stop(sprintf("%s$feature_metadata[[%s]] must be non-missing and non-empty.", context, view_col))
+    stop(sprintf(
+      "%s$feature_metadata[[%s]] must be non-missing and non-empty.",
+      context, view_col
+    ))
   }
   
+  family_name <- if (is.null(family)) NULL else ptmv_family_name(family)
+  has_y <- "Y" %in% colnames(sample_metadata)
+  response <- if (has_y) sample_metadata[["Y"]] else NULL
+  if (has_y && identical(family_name, "cox")) {
+    ptmv_validate_surv(response, sprintf("%s$sample_metadata$Y", context))
+    response <- survival::Surv(as.numeric(response[, 1]), as.numeric(response[, 2]))
+  } else if (require_y && anyNA(response)) {
+    stop(sprintf("%s$sample_metadata$Y must be non-missing for training.", context))
+  }
+  
+  storage.mode(feature_table) <- "double"
   study_names <- unique(study)
   view_names <- unique(view)
   if (length(study_names) == 0L) {
@@ -1005,130 +1093,266 @@ ptmv_normalize_container <- function(x, require_y = TRUE, context = "x", family 
   if (length(view_names) == 0L) {
     stop(sprintf("%s must contain at least one view.", context))
   }
-  
-  features_by_view <- split(feature_id, view)
-  features_by_view <- features_by_view[view_names]
-  p_by_view <- vapply(features_by_view, length, integer(1))
-  if (any(p_by_view == 0L)) {
-    empty_views <- names(p_by_view)[p_by_view == 0L]
-    stop(sprintf(
-      "%s contains view(s) with zero features: %s.",
-      context,
-      paste(empty_views, collapse = ", ")
-    ))
-  }
-  
-  samples_by_study <- split(sample_id, study)
-  samples_by_study <- samples_by_study[study_names]
+  samples_by_study <- split(sample_id, study)[study_names]
+  features_by_view <- split(feature_id, view)[view_names]
   n_by_study <- vapply(samples_by_study, length, integer(1))
-  if (any(n_by_study == 0L)) {
-    empty_studies <- names(n_by_study)[n_by_study == 0L]
-    stop(sprintf(
-      "%s contains study/studies with zero samples: %s.",
-      context,
-      paste(empty_studies, collapse = ", ")
-    ))
-  }
+  p_by_view <- vapply(features_by_view, length, integer(1))
   
   x_norm <- lapply(study_names, function(study_name) {
-    study_samples <- samples_by_study[[study_name]]
-    lapply(view_names, function(view_name) {
-      feature_ids <- features_by_view[[view_name]]
-      mat <- t(feature_table[feature_ids, study_samples, drop = FALSE])
-      colnames(mat) <- feature_ids
-      rownames(mat) <- study_samples
-      mat
+    ids <- samples_by_study[[study_name]]
+    out <- lapply(features_by_view, function(feature_ids) {
+      result <- t(feature_table[feature_ids, ids, drop = FALSE])
+      rownames(result) <- ids
+      result
     })
+    out[view_names]
   })
   names(x_norm) <- study_names
-  for (i in seq_along(x_norm)) {
-    names(x_norm[[i]]) <- view_names
-  }
   
   y_norm <- NULL
   y_all <- NULL
-  if (require_y) {
-    response <- sample_metadata$Y
-    if (identical(family_name, "cox")) {
-      response <- survival::Surv(
-        as.numeric(response[, 1]),
-        as.numeric(response[, 2])
-      )
-    }
+  if (has_y) {
     y_norm <- lapply(study_names, function(study_name) {
-      idx <- sample_metadata$study == study_name
-      ptmv_subset_response(response, idx)
+      ptmv_subset_response(response, study == study_name)
     })
     names(y_norm) <- study_names
     y_all <- response
-    if (identical(family_name, "cox")) {
-      for (study_name in study_names) {
-        ptmv_validate_surv(
-          y_norm[[study_name]],
-          sprintf("%s$sample_metadata$Y for study '%s'", context, study_name)
-        )
-      }
-    } else {
+    if (!identical(family_name, "cox")) {
+      y_norm <- lapply(y_norm, drop)
+      y_all <- drop(y_all)
+    }
+  }
+  x_list_all <- lapply(view_names, function(view_name) {
+    do.call(rbind, lapply(x_norm, `[[`, view_name))
+  })
+  names(x_list_all) <- view_names
+  
+  list(
+    x = x_norm, y = y_norm, k = length(study_names),
+    study_names = study_names, view_names = view_names,
+    n_views = length(view_names), n_by_study = n_by_study,
+    N_all = sum(n_by_study), p_by_view = p_by_view, p = sum(p_by_view),
+    x_list_all = x_list_all, y_all = y_all,
+    groups_all = factor(rep(study_names, times = n_by_study), levels = study_names),
+    sample_metadata = sample_metadata, feature_metadata = feature_metadata,
+    feature_table = feature_table, view_col = view_col, sample_ids = sample_id,
+    feature_ids = feature_id, features_by_view = features_by_view,
+    samples_by_study = samples_by_study, assay_names = NULL,
+    family = family_name, container_type = "pcl"
+  )
+}
+
+# Normalize a MultiAssayExperiment into the common study-by-view layout.
+ptmv_normalize_mae_container <- function(x, require_y = TRUE, context = "x",
+                                         family = NULL, assay.names = NULL) {
+  experiments <- MultiAssayExperiment::experiments(x)
+  if (length(experiments) == 0L) {
+    stop(sprintf("%s must contain at least one experiment (view).", context))
+  }
+  view_names <- names(experiments)
+  if (is.null(view_names) || anyNA(view_names) || any(view_names == "") ||
+      anyDuplicated(view_names)) {
+    stop(sprintf("%s experiments must have unique, non-empty names.", context))
+  }
+  is_se <- vapply(experiments, inherits, logical(1), what = "SummarizedExperiment")
+  if (!all(is_se)) {
+    stop(sprintf(
+      "%s experiment(s) must inherit from SummarizedExperiment: %s.",
+      context, paste(view_names[!is_se], collapse = ", ")
+    ))
+  }
+  assay_names <- ptmv_resolve_assay_names(experiments, assay.names, context)
+  
+  col_data <- SummarizedExperiment::colData(x)
+  sample_id <- rownames(col_data)
+  if (is.null(sample_id) || anyNA(sample_id) || any(sample_id == "") ||
+      anyDuplicated(sample_id)) {
+    stop(sprintf("rownames(colData(%s)) must be unique and non-empty.", context))
+  }
+  required <- "study"
+  if (require_y) required <- c(required, "Y")
+  missing_fields <- setdiff(required, colnames(col_data))
+  if (length(missing_fields) > 0L) {
+    stop(sprintf(
+      "colData(%s) must contain: %s.", context,
+      paste(required, collapse = ", ")
+    ))
+  }
+  study <- as.character(col_data$study)
+  if (anyNA(study) || any(study == "")) {
+    stop(sprintf("colData(%s)$study must be non-missing and non-empty.", context))
+  }
+  
+  sample_map <- as.data.frame(MultiAssayExperiment::sampleMap(x),
+                              stringsAsFactors = FALSE)
+  sample_map$assay <- as.character(sample_map$assay)
+  sample_map$primary <- as.character(sample_map$primary)
+  sample_map$colname <- as.character(sample_map$colname)
+  view_matrices <- vector("list", length(view_names))
+  names(view_matrices) <- view_names
+  features_by_view <- vector("list", length(view_names))
+  names(features_by_view) <- view_names
+  
+  for (view_name in view_names) {
+    map <- sample_map[sample_map$assay == view_name, , drop = FALSE]
+    complete <- nrow(map) == length(sample_id) &&
+      !anyDuplicated(map$primary) && !anyDuplicated(map$colname) &&
+      setequal(map$primary, sample_id)
+    if (!complete) {
+      stop(sprintf(
+        paste0("Experiment '%s' in %s must have a complete one-to-one sampleMap ",
+               "to every primary sample. Remove missing or replicated observations ",
+               "before fitting; MultiAssayExperiment::intersectColumns() may help."),
+        view_name, context
+      ))
+    }
+    map <- map[match(sample_id, map$primary), , drop = FALSE]
+    experiment <- experiments[[view_name]]
+    matrix_view <- as.matrix(SummarizedExperiment::assay(
+      experiment, assay_names[[view_name]]
+    ))
+    feature_id <- rownames(matrix_view)
+    assay_sample_id <- colnames(matrix_view)
+    if (is.null(feature_id) || anyNA(feature_id) || any(feature_id == "") ||
+        anyDuplicated(feature_id)) {
+      stop(sprintf(
+        "Experiment '%s' must have unique, non-empty feature identifiers.",
+        view_name
+      ))
+    }
+    if (is.null(assay_sample_id) || anyNA(assay_sample_id) ||
+        any(assay_sample_id == "") || anyDuplicated(assay_sample_id) ||
+        !all(map$colname %in% assay_sample_id)) {
+      stop(sprintf(
+        "Experiment '%s' has invalid assay column names for its sampleMap.",
+        view_name
+      ))
+    }
+    matrix_view <- matrix_view[, match(map$colname, assay_sample_id), drop = FALSE]
+    colnames(matrix_view) <- sample_id
+    storage.mode(matrix_view) <- "double"
+    view_matrices[[view_name]] <- matrix_view
+    features_by_view[[view_name]] <- feature_id
+  }
+  
+  family_name <- if (is.null(family)) NULL else ptmv_family_name(family)
+  has_y <- "Y" %in% colnames(col_data)
+  response <- if (has_y) col_data$Y else NULL
+  if (has_y && identical(family_name, "cox")) {
+    ptmv_validate_surv(response, sprintf("colData(%s)$Y", context))
+    response <- survival::Surv(as.numeric(response[, 1]), as.numeric(response[, 2]))
+  } else if (require_y && anyNA(response)) {
+    stop(sprintf("colData(%s)$Y must be non-missing for training.", context))
+  }
+  
+  study_names <- unique(study)
+  samples_by_study <- split(sample_id, study)[study_names]
+  n_by_study <- vapply(samples_by_study, length, integer(1))
+  x_norm <- lapply(study_names, function(study_name) {
+    ids <- samples_by_study[[study_name]]
+    out <- lapply(view_matrices, function(mat) {
+      result <- t(mat[, ids, drop = FALSE])
+      rownames(result) <- ids
+      result
+    })
+    out[view_names]
+  })
+  names(x_norm) <- study_names
+  
+  y_norm <- NULL
+  y_all <- NULL
+  if (has_y) {
+    y_norm <- lapply(study_names, function(study_name) {
+      ptmv_subset_response(response, study == study_name)
+    })
+    names(y_norm) <- study_names
+    y_all <- response
+    if (!identical(family_name, "cox")) {
       y_norm <- lapply(y_norm, drop)
       y_all <- drop(y_all)
     }
   }
   
   x_list_all <- lapply(view_names, function(view_name) {
-    mats <- lapply(x_norm, function(study_obj) study_obj[[view_name]])
-    out <- do.call(rbind, mats)
-    colnames(out) <- colnames(mats[[1]])
-    out
+    do.call(rbind, lapply(x_norm, `[[`, view_name))
   })
   names(x_list_all) <- view_names
-  
+  p_by_view <- vapply(features_by_view, length, integer(1))
   groups_all <- factor(rep(study_names, times = n_by_study), levels = study_names)
+  feature_metadata <- do.call(rbind, lapply(view_names, function(view_name) {
+    data.frame(featureID = features_by_view[[view_name]], view = view_name,
+               stringsAsFactors = FALSE)
+  }))
   
   list(
-    x = x_norm,
-    y = y_norm,
-    k = length(study_names),
-    study_names = study_names,
-    view_names = view_names,
-    n_views = length(view_names),
-    n_by_study = n_by_study,
-    N_all = sum(n_by_study),
-    p_by_view = p_by_view,
-    p = sum(p_by_view),
-    x_list_all = x_list_all,
-    y_all = y_all,
-    groups_all = groups_all,
-    sample_metadata = sample_metadata,
-    feature_metadata = feature_metadata,
-    feature_table = feature_table,
-    view_col = view_col,
-    sample_ids = sample_id,
-    feature_ids = feature_id,
-    features_by_view = features_by_view,
-    samples_by_study = samples_by_study
+    x = x_norm, y = y_norm, k = length(study_names),
+    study_names = study_names, view_names = view_names,
+    n_views = length(view_names), n_by_study = n_by_study,
+    N_all = sum(n_by_study), p_by_view = p_by_view, p = sum(p_by_view),
+    x_list_all = x_list_all, y_all = y_all, groups_all = groups_all,
+    sample_metadata = as.data.frame(col_data), feature_metadata = feature_metadata,
+    view_col = "view", sample_ids = sample_id,
+    feature_ids = unlist(features_by_view, use.names = FALSE),
+    features_by_view = features_by_view, samples_by_study = samples_by_study,
+    assay_names = assay_names, family = family_name,
+    container_type = "MultiAssayExperiment"
   )
 }
 
-# Helper: normalize and validate Bioconductor-style test input against training layout.
+# Dispatch either supported public container to the shared internal layout.
+ptmv_normalize_container <- function(x, require_y = TRUE, context = "x",
+                                     family = NULL, assay.names = NULL) {
+  if (inherits(x, "MultiAssayExperiment")) {
+    return(ptmv_normalize_mae_container(
+      x, require_y = require_y, context = context, family = family,
+      assay.names = assay.names
+    ))
+  }
+  if (is.list(x)) {
+    return(ptmv_normalize_pcl_container(
+      x, require_y = require_y, context = context, family = family,
+      assay.names = assay.names
+    ))
+  }
+  stop(sprintf(
+    paste0("%s must be a MultiAssayExperiment or a PCL-style list with ",
+           "feature_table, sample_metadata, and feature_metadata."),
+    context
+  ))
+}
+
+# Helper: normalize and validate either supported test input against training layout.
 # Used in `predict.gptLasso()` and `predict.cv.gptLasso()`.
-ptmv_normalize_newdata <- function(xtest, template) {
-  new_input <- ptmv_normalize_container(xtest, require_y = FALSE, context = "xtest")
+ptmv_normalize_newdata <- function(xtest, template, assay.names = NULL) {
+  if (is.null(assay.names) && inherits(xtest, "MultiAssayExperiment")) {
+    assay.names <- template$assay_names[
+      names(MultiAssayExperiment::experiments(xtest))
+    ]
+  }
+  new_input <- ptmv_normalize_container(
+    xtest, require_y = FALSE, context = "xtest", family = template$family,
+    assay.names = assay.names
+  )
   
   if (!all(new_input$study_names %in% template$study_names)) {
-    stop("xtest$sample_metadata$study must be a subset of the training study names.")
+    stop("xtest study labels must be a subset of the training study names.")
   }
   template_subset <- template$study_names[template$study_names %in% new_input$study_names]
   if (!identical(new_input$study_names, template_subset)) {
-    stop("xtest$sample_metadata$study must follow the training study ordering for the studies it contains.")
+    stop("xtest studies must follow the training study ordering for the studies it contains.")
   }
   if (!identical(new_input$view_names, template$view_names)) {
     stop("xtest must use the same views and view ordering as the training data.")
   }
-  if (!identical(new_input$feature_ids, template$feature_ids)) {
-    stop("xtest$feature_metadata$featureID must exactly match the training feature ordering.")
-  }
-  if (!identical(new_input$feature_metadata[[new_input$view_col]], template$feature_metadata[[template$view_col]])) {
-    stop("xtest$feature_metadata view assignments must exactly match the training data.")
+  same_features <- vapply(template$view_names, function(view_name) {
+    identical(new_input$features_by_view[[view_name]],
+              template$features_by_view[[view_name]])
+  }, logical(1))
+  if (!all(same_features)) {
+    stop(sprintf(
+      "xtest feature identifiers must exactly match training within view(s): %s.",
+      paste(template$view_names[!same_features], collapse = ", ")
+    ))
   }
   
   new_input
@@ -1321,7 +1545,7 @@ ptmv_metric_name <- function(family, type.measure) {
   ))
 }
 
-# Helper: summarize study-wise predictions into overall and per-study metrics.
+# Helper: summarize study-wise predictions into mean and per-study metrics.
 # Used in `cv.gptLasso()`, `predict.gptLasso()`, and `predict.cv.gptLasso()`.
 ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE) {
   study_names <- names(y)
@@ -1329,10 +1553,7 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
     ptmv_metric_value(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
   
-  all_y <- ptmv_stack_response(y)
-  all_pred <- unlist(preds, use.names = FALSE)
   out <- c(
-    pooled = ptmv_metric_value(all_y, all_pred, family, type.measure),
     mean = mean(study_err, na.rm = TRUE),
     setNames(study_err, study_names)
   )
@@ -1343,7 +1564,6 @@ ptmv_summarize_metric <- function(preds, y, family, type.measure, add_r2 = FALSE
     }, numeric(1))
     out <- c(
       out,
-      "r^2.pooled" = ptmv_r2_value(all_y, all_pred),
       "r^2.mean" = mean(study_r2, na.rm = TRUE),
       setNames(study_r2, paste0("r^2.", study_names))
     )
@@ -1358,13 +1578,8 @@ ptmv_metric_entries <- function(preds, y, family, type.measure, metric_fun = ptm
   study_metric <- vapply(study_names, function(study_name) {
     metric_fun(y[[study_name]], preds[[study_name]], family, type.measure)
   }, numeric(1))
-  pooled_metric <- metric_fun(
-    ptmv_stack_response(y),
-    unlist(preds, use.names = FALSE),
-    family,
-    type.measure
-  )
-  c(pooled = pooled_metric, mean = mean(study_metric, na.rm = TRUE), stats::setNames(study_metric, study_names))
+  c(mean = mean(study_metric, na.rm = TRUE),
+    stats::setNames(study_metric, study_names))
 }
 
 # Helper: build the user-facing prediction metrics report.
@@ -1379,7 +1594,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
     ind = ptmv_metric_entries(ind_preds, y, family, type.measure),
     pre = ptmv_metric_entries(pre_preds, y, family, type.measure)
   )
-  colnames(metrics[[metric_name]]) <- c("pooled", "mean", study_names)
+  colnames(metrics[[metric_name]]) <- c("mean", study_names)
   
   if (family == "gaussian") {
     metrics[["r2"]] <- rbind(
@@ -1393,7 +1608,7 @@ ptmv_build_metric_report <- function(overall_preds, ind_preds, pre_preds, y, fam
         ptmv_r2_value(y, pred)
       })
     )
-    colnames(metrics[["r2"]]) <- c("pooled", "mean", study_names)
+    colnames(metrics[["r2"]]) <- c("mean", study_names)
   }
   
   metrics

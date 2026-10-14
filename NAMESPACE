@@ -7,3 +7,10 @@ export(gen_simmba_multistudy)
 export(gptLasso)
 export(sim.binary.data)
 export(sim.gaussian.data)
+importFrom(stats,
+  binomial,
+  coef,
+  gaussian,
+  predict,
+  setNames
+)

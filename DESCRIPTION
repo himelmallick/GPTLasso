@@ -1,11 +1,50 @@
 Package: GPTLasso
-Title: What the Package Does (One Line, Title Case)
-Version: 0.0.0.9000
-Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+Type: Package
+Title: Multistudy Multiview Pretraining and Transfer Learning
+Version: 0.99.0
+Authors@R:
+    c(
+      person("Chuxuan", "Gao", email = "chg4016@alumni.weill.cornell.edu",
+             role = c("aut", "cre"),
+             comment = c(ORCID = "0009-0000-3130-1314")),
+      person("Nalin", "Arora", email = "naa4050@med.cornell.edu",
+             role = "aut",
+             comment = c(ORCID = "0009-0009-1340-688X")),
+      person("Himel", "Mallick", email = "him4004@med.cornell.edu",
+             role = "aut")
+    )
+Description: Fits penalized regression models that combine multiview integration
+    with multistudy pretraining and transfer learning. Legacy PCL-style lists
+    and MultiAssayExperiment inputs support Gaussian, binomial, and Cox
+    outcomes. Cross-validation selects view-fusion and
+    transfer-learning parameters while preserving study-specific predictions.
+License: MIT + file LICENSE
 Encoding: UTF-8
+Depends:
+    R (>= 4.6.0)
+Imports:
+    InterSIM,
+    MultiAssayExperiment,
+    SummarizedExperiment,
+    glmnet,
+    multiview,
+    parallel,
+    pROC,
+    stats,
+    stringr,
+    survival,
+    withr
+Suggests:
+    BiocStyle,
+    covr,
+    knitr,
+    rmarkdown,
+    S4Vectors,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+URL: https://github.com/himelmallick/GPTLasso
+BugReports: https://github.com/himelmallick/GPTLasso/issues
+biocViews: Software, Classification, Regression, Survival, StatisticalMethod
+Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0

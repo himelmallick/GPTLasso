@@ -1,0 +1,186 @@
+---
+title: "GPTLasso: Multistudy and Multiview Learning"
+author: "Chuxuan Gao"
+package: GPTLasso
+output:
+  BiocStyle::html_document:
+    toc_float: true
+vignette: >
+  %\VignetteEncoding{UTF-8}
+  %\VignetteIndexEntry{GPTLasso: Multistudy and Multiview Learning}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(GPTLasso)
+library(MultiAssayExperiment)
+library(SummarizedExperiment)
+```
+
+# Overview
+
+GPTLasso combines multiview cooperative learning with multistudy
+pretraining. Public interfaces accept either the PCL-style list or a
+`MultiAssayExperiment` (MAE). A PCL contains a feature-by-sample
+`feature_table`, `sample_metadata` with `sample_id`, `study`, and `Y`,
+and `feature_metadata` with `featureID` plus a view column. MAE
+experiments represent views, `colData()` stores `study` and `Y`, and
+`sampleMap()` connects assay columns to primary samples. Training and
+prediction containers may use different supported formats when their
+layouts match.
+
+# Simulated PCL input
+
+The simulation wrappers return ready-to-fit PCL objects.
+
+```{r pcl-input}
+simulated <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+                               de.prob = rep(0.5, 3), seed = 101)
+pcl_train <- simulated$x_train
+names(pcl_train)
+dim(pcl_train$feature_table)
+table(pcl_train$sample_metadata$study)
+table(pcl_train$feature_metadata$featureType)
+```
+
+# Alternative MAE input
+
+Assay column identifiers may differ from primary sample identifiers
+because the mapping, rather than name equality, controls alignment.
+
+```{r constructor}
+make_example <- function(n_study = 2L, n_view = 2L, family = "gaussian") {
+    set.seed(101)
+    n_each <- 12L
+    n <- n_study * n_each
+    primary <- paste0("sample", seq_len(n))
+    study <- rep(paste0("study", seq_len(n_study)), each = n_each)
+    experiments <- lapply(seq_len(n_view), function(view) {
+        mat <- matrix(rnorm(4 * n), nrow = 4)
+        rownames(mat) <- paste0("feature", seq_len(4))
+        colnames(mat) <- paste0("view", view, "_column", seq_len(n))
+        SummarizedExperiment(assays = list(value = mat))
+    })
+    names(experiments) <- paste0("view", seq_len(n_view))
+    signal <- colSums(assay(experiments[[1]])[1:2, , drop = FALSE])
+    Y <- switch(family,
+        gaussian = signal + rnorm(n),
+        binomial = rbinom(n, 1, plogis(scale(signal))),
+        cox = I(survival::Surv(rexp(n, exp(scale(signal))),
+                               rep(c(0, 1), length.out = n)))
+    )
+    map <- do.call(rbind, lapply(names(experiments), function(view) {
+        S4Vectors::DataFrame(
+            assay = factor(view, levels = names(experiments)),
+            primary = primary, colname = colnames(experiments[[view]]))
+    }))
+    MultiAssayExperiment(
+        experiments = ExperimentList(experiments),
+        colData = S4Vectors::DataFrame(study = study, Y = Y,
+                                       row.names = primary),
+        sampleMap = map
+    )
+}
+
+mae <- make_example()
+mae
+sampleMap(mae)
+```
+
+For partial overlap, preprocess explicitly with `intersectColumns()`.
+GPTLasso requires every selected view to map exactly once to every
+primary sample.
+
+# Four supported layouts
+
+```{r layouts}
+multi_study_multi_view <- make_example(2, 2)
+multi_study_one_view <- make_example(2, 1)
+one_study_multi_view <- make_example(1, 2)
+one_study_one_view <- make_example(1, 1)
+c(MSMV = length(experiments(multi_study_multi_view)),
+  MSOV = length(experiments(multi_study_one_view)),
+  OSMV = length(experiments(one_study_multi_view)),
+  OSOV = length(experiments(one_study_one_view)))
+```
+
+With one view, effective rho is 0; transfer alpha remains meaningful
+across studies. With one study, effective alpha is 1; rho remains
+tunable across views. All cases return the same GPTLasso classes.
+
+# Complete Gaussian workflow
+
+```{r gaussian-fit}
+fit <- gptLasso(pcl_train, alpha.ptlasso = 0.5,
+                rho = c(0, 1), family = "gaussian",
+                type.measure = "mse", nfolds = 3)
+class(fit)
+fit[c("alpha.ptlasso", "fitoverall.rho", "target.study.names")]
+
+prediction <- predict(fit, simulated$x_test, type = "response")
+names(prediction$yhatpre)
+prediction$metrics$MSE
+```
+
+`target` restricts individual and pretrained fits while the overall
+stage still uses all studies. `fitoverall`, `fitind`, and `fitpre`
+expose the three stages; `support.vars` contains the overall all-study
+model support.
+
+# Reduced layouts
+
+```{r reduced-fits}
+one_view_fit <- gptLasso(multi_study_one_view, alpha.ptlasso = 0.5,
+                         rho = c(0, 1), nfolds = 3)
+c(effective = one_view_fit$rho, requested = one_view_fit$rho.requested)
+
+one_study_fit <- gptLasso(one_study_multi_view, alpha.ptlasso = 0.25,
+                          rho = c(0, 1), nfolds = 3)
+c(effective = one_study_fit$alpha.ptlasso,
+  requested = one_study_fit$alpha.ptlasso.requested)
+```
+
+# Cross-validation and assay selection
+
+For MAE input, `assay.names = NULL` requires one assay per experiment. A
+scalar selects the same name everywhere; a named vector selects one
+assay per experiment. `assay.names` must be `NULL` for PCL input.
+
+```{r cross-validation}
+cvfit <- cv.gptLasso(pcl_train,
+                     alpha.ptlasso.list = c(0, 0.5, 1),
+                     rho = c(0, 1), nfolds = 3)
+cvfit$alpha.ptlasso.hat
+cvfit$errpre
+```
+
+# Binomial and Cox outcomes
+
+Use `family = "binomial"` with AUC or deviance. Cox outcomes must be
+`Surv` objects; event-stratified folds support deviance or concordance
+(`"C"`).
+
+```{r other-families, eval=FALSE}
+binary_mae <- make_example(2, 2, family = "binomial")
+binary_fit <- gptLasso(binary_mae, family = "binomial",
+                       type.measure = "auc", rho = c(0, 1), nfolds = 3)
+
+cox_mae <- make_example(2, 2, family = "cox")
+cox_fit <- gptLasso(cox_mae, family = "cox", type.measure = "C",
+                    rho = c(0, 1), nfolds = 3)
+predict(cox_fit, cox_mae, type = "link")
+```
+
+# Installation and references
+
+Install through Bioconductor with `BiocManager::install("GPTLasso")`.
+GPTLasso builds on `glmnet`, `multiview`, and Bioconductor's MAE
+infrastructure.
+
+```{r session-info}
+sessionInfo()
+```

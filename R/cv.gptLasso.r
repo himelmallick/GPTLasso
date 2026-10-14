@@ -3,7 +3,8 @@
 #' Refit `gptLasso()` over a grid of transfer-learning values and summarize the
 #' pretrained performance profile used to select the final `alpha.ptlasso`.
 #'
-#' @param x A named list with `feature_table`, `sample_metadata`, and `feature_metadata`.
+#' @param x A `MultiAssayExperiment` or legacy PCL-style list; see [gptLasso()].
+#' @param assay.names Assays to use for MAE input; must be `NULL` for PCL input.
 #' @param alpha.ptlasso.list Numeric vector of transfer-learning values to compare.
 #' @param family Response family: `"gaussian"`, `"binomial"`, or `"cox"`.
 #' @param type.measure Cross-validation metric used to compare transfer-learning levels.
@@ -25,33 +26,44 @@
 #' @param ncores Number of worker cores for study-level parallel fits.
 #' @param ... Additional arguments forwarded to `gptLasso()`.
 #'
-#' @return A `cv.gptLasso` object, stored as a list. Important components include:
+#' @return A `cv.gptLasso` object, stored as a list with these components:
 #' \itemize{
-#'   \item `alpha.ptlasso.hat`: the selected fixed transfer-learning value; when `target != NULL`, this value is selected by optimizing the target-study `mean` column of `errpre`.
-#'   \item `varying.alpha.ptlasso.hat`: target-specific transfer-learning values chosen from the same grid.
-#'   \item `alpha.ptlasso.list`: the candidate transfer-learning grid that was evaluated.
-#'   \item `errpre`: a matrix summarizing pretrained performance for each candidate alpha, with `pooled`, `mean`, and study-specific columns.
-#'   \item `target`: the user-supplied target specification.
-#'   \item `target.study.names`: normalized target studies used in CV summaries.
-#'   \item `errind`: performance summary for the individual study fits on the training layout.
-#'   \item `erroverall`: performance summary for the pooled stage-one fit on the training layout.
+#'   \item `call`: the matched cross-validation call.
+#'   \item `alpha.ptlasso.hat`, `varying.alpha.ptlasso.hat`: selected fixed and
+#'   target-specific transfer-learning values.
+#'   \item `alpha.ptlasso.list`, `alpha.ptlasso.requested`,
+#'   `transfer.applicable`: evaluated/effective and requested grids and whether
+#'   cross-study transfer applies.
+#'   \item `rho`, `rho.requested`, `fusion.applicable`: effective/requested
+#'   fusion grids and whether multiview fusion tuning applies.
+#'   \item `assay.names`: selected assay names inherited by the fitted models.
+#'   \item `target`, `target.study.names`: supplied and normalized targets.
+#'   \item `errpre`: candidate-alpha performance with `mean` and study columns.
+#'   \item `errind`, `erroverall`: individual-model and overall all-study model
+#'   training-layout performance summaries.
+#'   \item `fitoverall.rho`, `fitind.rho`, `fitpre.rho`: selected rho values
+#'   for the three model stages.
 #'   \item `fitoverall`: the shared overall fit reused across the alpha grid.
 #'   \item `fitind`: the shared list of individual study fits reused across the alpha grid.
 #'   \item `fit`: the list of `gptLasso` objects corresponding to `alpha.ptlasso.list`.
-#'   \item `overall.lambda`, `ind.lambda`, `pre.lambda`: lambda rules used when summarizing candidate performance.
+#'   \item `family`, `type.measure`: response and metric configuration.
+#'   \item `overall.lambda`, `ind.lambda`, `pre.lambda`: lambda rules used to
+#'   summarize candidate performance.
 #' }
 #'
 #' @examples
 #' # Gaussian cross-validation example
 #' set.seed(1234)
-#' sim_dat <- sim.gaussian.data()
+#' sim_dat <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+#'                              de.prob = rep(0.5, 3))
 #' x_train <- sim_dat$x_train
 #'
 #' cv_fit_gaussian <- cv.gptLasso(
 #'   x = x_train,
 #'   family = "gaussian",
 #'   type.measure = "mse",
-#'   alpha.ptlasso.list = c(0, 0.5, 1),
+#'   alpha.ptlasso.list = c(0, 1),
+#'   rho = 0,
 #'   nfolds = 3
 #' )
 #'
@@ -63,29 +75,16 @@
 #'   x = x_train,
 #'   family = "gaussian",
 #'   type.measure = "mse",
-#'   target = c("Study_1", "Study_3"),
-#'   alpha.ptlasso.list = c(0, 0.5, 1),
+#'   target = "Study_2",
+#'   alpha.ptlasso.list = c(0, 1),
+#'   rho = 0,
 #'   nfolds = 3
 #' )
 #'
-#' # Binomial cross-validation example
-#' set.seed(5678)
-#' sim_dat_bin <- sim.binary.data()
-#' x_train_bin <- sim_dat_bin$x_train
-#'
-#' cv_fit_binomial <- cv.gptLasso(
-#'   x = x_train_bin,
-#'   family = "binomial",
-#'   type.measure = "auc",
-#'   alpha.ptlasso.list = c(0, 0.5, 1),
-#'   nfolds = 3
-#' )
-#'
-#' cv_fit_binomial$alpha.ptlasso.hat
-#' head(cv_fit_binomial$errpre)
 #' @export
 cv.gptLasso <- function(
     x,
+    assay.names = NULL,
     alpha.ptlasso.list = seq(0, 1, length = 11),
     family = c("gaussian", "binomial", "cox"),
     type.measure = c("default", "mse", "auc", "deviance", "C"),
@@ -136,16 +135,23 @@ cv.gptLasso <- function(
     stop("For cox family, type.measure must be 'C' or 'deviance'.")
   }
   
-  alpha.ptlasso.list <- sort(unique(as.numeric(alpha.ptlasso.list)))
-  if (length(alpha.ptlasso.list) < 2L ||
-      any(is.na(alpha.ptlasso.list)) ||
-      any(alpha.ptlasso.list < 0 | alpha.ptlasso.list > 1)) {
+  alpha.ptlasso.requested <- sort(unique(as.numeric(alpha.ptlasso.list)))
+  if (length(alpha.ptlasso.requested) < 2L ||
+      any(is.na(alpha.ptlasso.requested)) ||
+      any(alpha.ptlasso.requested < 0 | alpha.ptlasso.requested > 1)) {
     stop("alpha.ptlasso.list must contain at least two values between 0 and 1.")
   }
   rho <- unique(as.numeric(rho))
   if (length(rho) < 1L || any(is.na(rho))) {
     stop("rho must contain at least one numeric value.")
   }
+  
+  topology <- ptmv_normalize_container(
+    x, require_y = TRUE, context = "x", family = family,
+    assay.names = assay.names
+  )
+  transfer.applicable <- topology$k > 1L
+  alpha.ptlasso.list <- if (transfer.applicable) alpha.ptlasso.requested else 1
   
   metric.rule <- ptmv_match_metric(type.measure)
   fit <- vector("list", length(alpha.ptlasso.list))
@@ -159,6 +165,7 @@ cv.gptLasso <- function(
     
     fit[[ii]] <- gptLasso(
       x = x,
+      assay.names = assay.names,
       alpha.ptlasso = alpha.ptlasso,
       family = family,
       type.measure = type.measure,
@@ -200,12 +207,6 @@ cv.gptLasso <- function(
     }, numeric(1))
     
     err.rows[[ii]] <- c(
-      pooled = ptmv_metric_value(
-        ptmv_stack_response(fit[[ii]]$training.layout$y[target.study.names]),
-        unlist(pred.pre, use.names = FALSE),
-        family = family,
-        type.measure = type.measure
-      ),
       mean = mean(study.err, na.rm = TRUE),
       stats::setNames(study.err, target.study.names)
     )
@@ -279,7 +280,12 @@ cv.gptLasso <- function(
     target = target,
     target.study.names = target.study.names,
     alpha.ptlasso.list = alpha.ptlasso.list,
-    rho = rho,
+    alpha.ptlasso.requested = alpha.ptlasso.requested,
+    transfer.applicable = transfer.applicable,
+    rho = selected.fit$rho,
+    rho.requested = rho,
+    fusion.applicable = selected.fit$fusion.applicable,
+    assay.names = selected.fit$assay.names,
     errpre = errpre,
     errind = errind,
     erroverall = erroverall,

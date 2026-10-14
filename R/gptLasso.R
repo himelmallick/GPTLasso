@@ -3,11 +3,15 @@
 #' Fit the overall, study-specific individual, and pretrained transfer models
 #' for a Bioconductor-style multistudy multiview input container.
 #'
-#' @param x A named list with entries `feature_table`, `sample_metadata`, and
-#'   `feature_metadata`. The feature table must be feature-by-sample, the sample
-#'   metadata must contain `sample_id`, `study`, and `Y`, and the feature
-#'   metadata must contain `featureID` plus a view-mapping column such as
-#'   `featureType`.
+#' @param x Either a [MultiAssayExperiment::MultiAssayExperiment] with one
+#'   named [SummarizedExperiment::SummarizedExperiment] per view, or a PCL-style
+#'   list with `feature_table`, `sample_metadata`, and `feature_metadata`.
+#'   PCL sample metadata must contain `sample_id`, `study`, and `Y`; feature
+#'   metadata must contain `featureID` and a recognized view column.
+#' @param assay.names Assays to use for `MultiAssayExperiment` input. Must be
+#'   `NULL` for PCL input. For MAE input, `NULL` requires one assay per experiment;
+#'   a scalar selects the same assay name in every experiment; a named character
+#'   vector selects one assay per experiment.
 #' @param alpha.ptlasso Transfer-learning level in `[0, 1]`.
 #' @param family Response family: `"gaussian"`, `"binomial"`, or `"cox"`.
 #' @param type.measure Cross-validation metric optimized inside the multiview fits.
@@ -32,35 +36,59 @@
 #' @param ncores Number of worker cores for study-level parallel fits.
 #' @param ... Additional arguments forwarded to the multiview base fitter.
 #'
-#' @return A `gptLasso` object, stored as a list. Important components include:
+#' @return A `gptLasso` object, stored as a list with these components:
 #' \itemize{
-#'   \item `study.names`: study labels detected from `x$sample_metadata$study`.
-#'   \item `view.names`: view labels detected from `x$feature_metadata`.
-#'   \item `n.by.study`: number of samples in each study.
-#'   \item `alpha.ptlasso`: the transfer-learning level used for the fit.
-#'   \item `fitoverall`: the pooled multiview stage-one fit.
+#'   \item `call`: the matched fitting call.
+#'   \item `k`, `N.all`, `n.by.study`: numbers of studies, total samples, and
+#'   samples per study.
+#'   \item `study.names`, `group.levels`: study labels detected from
+#'   the input sample metadata, in fitting order.
+#'   \item `view.names`, `n.views`, `p.by.view`, `features.all`: input view
+#'   names and feature-count summaries.
+#'   \item `alpha.ptlasso`, `alpha.ptlasso.requested`,
+#'   `transfer.applicable`: effective/requested transfer values and whether
+#'   cross-study transfer applies.
+#'   \item `rho`, `rho.requested`, `fusion.applicable`: effective/requested
+#'   multiview fusion grids and whether fusion tuning applies.
+#'   \item `assay.names`: the selected assay name for each experiment.
+#'   \item `alpha.glmnet`, `family`, `type.measure`: base-learner and response
+#'   configuration.
+#'   \item `target`, `target.study.names`: supplied and normalized targets.
+#'   \item `overall.lambda`, `ind.lambda`, `pre.lambda`, `fitoverall.lambda`:
+#'   requested lambda rules and the selected overall-model lambda.
+#'   \item `fitoverall.rho`, `fitind.rho`, `fitpre.rho`: selected rho values
+#'   for the overall, individual, and pretrained fits.
+#'   \item `group.intercepts`, `group.intercepts.requested`, `group.baseline`,
+#'   `cox.study.effect`: effective/requested study-baseline configuration.
+#'   \item `foldid`, `foldid.within`: stacked and within-study fold assignments.
+#'   \item `support.vars`, `penalty.factor`: selected overall-model feature
+#'   indices and applied penalty factors.
+#'   \item `fitoverall`: the overall all-study multiview fit.
 #'   \item `fitind`: a named list of study-specific individual fits.
 #'   \item `fitpre`: a named list of study-specific pretrained transfer fits.
-#'   \item `target`: the user-supplied target specification.
-#'   \item `target.study.names`: normalized target studies used for study-specific fitting.
-#'   \item `support.vars`: feature indices selected by the overall stage-one fit.
-#'   \item `group.baseline`: study-level baseline offsets used when `group.intercepts = TRUE`.
-#'   \item `preval.offset`: study-wise stage-one linear predictors reused as offsets in pretraining.
-#'   \item `training.layout`: the normalized training container split by study and view.
+#'   \item `baseline.offset`, `preval.offset`: study-baseline and stage-one
+#'   linear-predictor offsets.
+#'   \item `training.layout`: the internal study-by-view matrix layout derived
+#'   from the input container.
+#'   \item `parallel`, `ncores`: effective study-level parallel settings.
 #' }
 #'
 #' @examples
 #' # Gaussian example
 #' set.seed(1234)
-#' sim_dat <- sim.gaussian.data()
+#' sim_dat <- sim.gaussian.data(nsample = c(15, 15), nstudy = 2,
+#'                              de.prob = rep(0.5, 3))
 #' x_train <- sim_dat$x_train
-#' str(x_train)
+#' names(x_train)
+#' colnames(x_train$sample_metadata)
+#' table(x_train$sample_metadata$study)
 #'
 #' fit_gaussian <- gptLasso(
 #'   x = x_train,
 #'   alpha.ptlasso = 0.5,
 #'   family = "gaussian",
 #'   type.measure = "mse",
+#'   rho = 0,
 #'   nfolds = 3
 #' )
 #'
@@ -69,6 +97,7 @@
 #'   alpha.ptlasso = 0.5,
 #'   family = "gaussian",
 #'   type.measure = "mse",
+#'   rho = 0,
 #'   target = "Study_2",
 #'   nfolds = 3
 #' )
@@ -79,24 +108,10 @@
 #' fit_gaussian$n.by.study
 #' fit_gaussian$support.vars
 #'
-#' # Binomial example
-#' set.seed(5678)
-#' sim_dat_bin <- sim.binary.data()
-#' x_train_bin <- sim_dat_bin$x_train
-#'
-#' fit_binomial <- gptLasso(
-#'   x = x_train_bin,
-#'   alpha.ptlasso = 0.5,
-#'   family = "binomial",
-#'   type.measure = "auc",
-#'   nfolds = 3
-#' )
-#'
-#' names(fit_binomial)
-#' fit_binomial$group.baseline
 #' @export
 gptLasso <- function(
     x,
+    assay.names = NULL,
     alpha.ptlasso = 0.5,
     family = c("gaussian", "binomial", "cox"),
     type.measure = c("default", "mse", "auc", "deviance", "C"),
@@ -169,8 +184,12 @@ gptLasso <- function(
     stop(sprintf("nfolds must be a single integer greater than or equal to %d.", min.folds))
   }
   
-  family_arg <- switch(family, gaussian = gaussian(), binomial = binomial(), cox = "cox")
-  input <- ptmv_normalize_container(x, require_y = TRUE, context = "x", family = family)
+  family_arg <- switch(family, gaussian = stats::gaussian(),
+                       binomial = stats::binomial(), cox = "cox")
+  input <- ptmv_normalize_container(
+    x, require_y = TRUE, context = "x", family = family,
+    assay.names = assay.names
+  )
   x <- input$x
   y <- input$y
   k <- input$k
@@ -184,38 +203,23 @@ gptLasso <- function(
   x_list_all <- input$x_list_all
   y_all <- input$y_all
   groups_all <- input$groups_all
+  alpha.ptlasso.requested <- alpha.ptlasso
+  rho.requested <- rho
+  group.intercepts.requested <- group.intercepts
+  transfer.applicable <- k > 1L
+  fusion.applicable <- n_views > 1L
+  if (!transfer.applicable) {
+    alpha.ptlasso <- 1
+    group.intercepts <- FALSE
+    fitind <- NULL
+  }
+  if (!fusion.applicable) rho <- 0
   target.study.names <- ptmv_resolve_target_studies(
     target = target,
     study_names = study_names,
     context = "gptLasso(target)"
   )
   k_target <- length(target.study.names)
-  
-  if (k == 1L) {
-    message("Single-study input detected; falling back to cvar.multiview().")
-    nfolds.single <- min(nfolds, ptmv_response_nobs(y[[1]]))
-    if (family == "cox") {
-      events.single <- sum(as.numeric(y[[1]][, 2]) == 1)
-      if (events.single < 3L) {
-        stop("Cox fitting requires at least 3 observed events in the study.")
-      }
-      nfolds.single <- min(nfolds.single, events.single)
-    }
-    return(cvar.multiview(
-      x.list = x[[1]],
-      y = y[[1]],
-      family = family_arg,
-      alpha = alpha.glmnet,
-      rho = rho,
-      s = overall.lambda,
-      nfolds = nfolds.single,
-      foldid = if (is.null(foldid)) NULL else ptmv_renumber_foldid(foldid),
-      penalty.factor = penalty.factor,
-      type.measure = type.measure,
-      keep = TRUE,
-      ...
-    ))
-  }
   
   if (family == "cox") {
     event.counts <- vapply(y, function(yi) sum(as.numeric(yi[, 2]) == 1), integer(1))
@@ -236,34 +240,6 @@ gptLasso <- function(
         y_all, groups_all, ptmv_renumber_foldid(foldid), context = "foldid"
       )
     }
-  }
-  
-  if (n_views == 1L) {
-    message("Single-view multi-study input detected; falling back to ptLasso().")
-    x_single <- x_list_all[[1]]
-    if (is.null(penalty.factor)) {
-      penalty.factor <- rep(1, ncol(x_single))
-    }
-    return(ptLasso::ptLasso(
-      x = x_single,
-      y = y_all,
-      groups = groups_all,
-      alpha = alpha.ptlasso,
-      family = family,
-      type.measure = type.measure,
-      use.case = "inputGroups",
-      overall.lambda = overall.lambda,
-      foldid = foldid,
-      nfolds = nfolds,
-      verbose = verbose,
-      penalty.factor = penalty.factor,
-      fitoverall = fitoverall,
-      fitind = fitind,
-      en.alpha = alpha.glmnet,
-      group.intercepts = group.intercepts,
-      parallel = parallel,
-      ...
-    ))
   }
   
   if (is.null(penalty.factor)) {
@@ -401,7 +377,9 @@ gptLasso <- function(
   x_target <- x[target.study.names]
   y_target <- y[target.study.names]
   
-  if (is.null(fitind)) {
+  if (!transfer.applicable) {
+    fitind <- stats::setNames(list(fitoverall), study_names)
+  } else if (is.null(fitind)) {
     if (verbose) {
       message("Fitting individual multiview models.")
     }
@@ -429,7 +407,7 @@ gptLasso <- function(
     message("Fitting pretrained multiview models.")
   }
   
-  if (alpha.ptlasso == 1) {
+  if (!transfer.applicable || alpha.ptlasso == 1) {
     fitpre <- fitind
   } else {
     fitpre <- ptmv_maybe_parallel_lapply(seq_len(k_target), function(kk) {
@@ -473,10 +451,15 @@ gptLasso <- function(
     p.by.view = p_by_view,
     features.all = p,
     alpha.ptlasso = alpha.ptlasso,
+    alpha.ptlasso.requested = alpha.ptlasso.requested,
+    transfer.applicable = transfer.applicable,
     alpha.glmnet = alpha.glmnet,
     target = target,
     target.study.names = target.study.names,
     rho = rho,
+    rho.requested = rho.requested,
+    fusion.applicable = fusion.applicable,
+    assay.names = input$assay_names,
     family = family,
     type.measure = type.measure,
     overall.lambda = overall.lambda,
@@ -491,6 +474,7 @@ gptLasso <- function(
       if (is.null(model$rho.choice)) NA_real_ else model$rho.choice
     }, numeric(1)), target.study.names),
     group.intercepts = group.intercepts,
+    group.intercepts.requested = group.intercepts.requested,
     group.baseline = group_baseline,
     cox.study.effect = if (family == "cox" && isTRUE(group.intercepts)) "fixed_shift" else NULL,
     foldid = foldid_all,

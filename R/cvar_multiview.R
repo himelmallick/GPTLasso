@@ -150,7 +150,7 @@ cvar.multiview <- function(x.list, y,
   }
   
   alignment <- match.arg(alignment)
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) withr::local_seed(seed)
   family_name <- ptmv_family_name(family)
   family_arg <- if (family_name == "cox") "cox" else family
   N <- nrow(x.list[[1L]])
@@ -250,7 +250,10 @@ cvar.multiview <- function(x.list, y,
   for (g in seq_len(nrow(grid))) {
     a <- grid$alpha[g]
     r <- grid$rho[g]
-    if (trace.it || verbose) cat(sprintf("Tuning alpha = %.3f, rho = %.3f (%d/%d)\n", a, r, g, nrow(grid)))
+    if (trace.it || verbose) {
+      message(sprintf("Tuning alpha = %.3f, rho = %.3f (%d/%d)",
+                      a, r, g, nrow(grid)))
+    }
     combo_attempt <- tryCatch({
       if (is.null(lambda)) {
         master <- mv_fit(x.list, y, family_arg, a, r, weights = weights,
